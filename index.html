@@ -256,8 +256,8 @@ function captureVideoSnap(node){
 function ensureVideoEl(n){
   if(n.isVideo&&n._objectUrl&&(!n.videoEl||typeof n.videoEl.pause!=='function')){
     const v=document.createElement('video');
-    v.src=n._objectUrl;v.muted=true;v.preload='metadata';
-    n.videoEl=v;
+    v.src=n._objectUrl;
+    attachVideo(n,v);
   }
 }
 function destroyVideo(node){
@@ -505,8 +505,8 @@ function uploadAsset(){
     };
     if(isVid){
       const v=document.createElement('video');
-      v.src=url;v.muted=true;v.preload='metadata';
-      n.videoEl=v;
+      v.src=url;
+      attachVideo(n,v);
     }
     nodes.push(n);setSelection([n]);
     saveProjects();
@@ -630,8 +630,47 @@ async function runAI(){
     return;
   }
   if(t==="image"){
-    alert("图片生成接口还没接入，你后续想要我再加");
+    const ratio=document.getElementById('aiRatio').value;
+    const k=document.getElementById('aiK').value;
+    const seed=parseInt(document.getElementById('aiSeed').value,10);
+    const longSide={'1':1024,'2':2048,'4':4096}[k]||1024;
+    let size;
+    if(ratio==='9:16')size=longSide/2+'x'+longSide;
+    else if(ratio==='1:1')size=longSide+'x'+longSide;
+    else size=longSide+'x'+(longSide/2);
+    const payload={model:'agnes-image-2.5-flash',prompt:prompt,size:size};
+    if(!isNaN(seed)&&seed>=0)payload.seed=seed;
+    if(refImageBlob)payload.image=await blobToBase64(refImageBlob);
+    toast('图片生成中…');
     closeAIModal();
+    try{
+      const res=await fetch(API_BASE+'/images/generations',{
+        method:'POST',
+        headers:{'Authorization':'Bearer '+API_KEY,'Content-Type':'application/json'},
+        body:JSON.stringify(payload)
+      });
+      const data=await res.json();
+      if(!res.ok||!(data.data&&data.data[0]&&data.data[0].url)){
+        alert('图片生成失败：'+JSON.stringify(data).slice(0,300));
+        refImageBlob=null;
+        return;
+      }
+      const url=data.data[0].url;
+      const c=getViewCenterPos();
+      const ar=ratio==='9:16'?0.5625:(ratio==='1:1'?1:1.7778);
+      const n={
+        x:c.x-90,y:c.y-70,w:180,h:Math.round(180/ar),
+        title:'AI生成图片',type:'img',isVideo:false,src:url
+      };
+      nodes.push(n);
+      setSelection([n]);
+      saveProjects();
+      draw();
+      toast('✅ 图片已生成，加入画布');
+    }catch(e){
+      alert('请求失败：'+e.message+'（请确认 Agnes 网关已启动）');
+    }
+    refImageBlob=null;
     return;
   }
   const dur=document.getElementById("aiDuration").value;
@@ -699,8 +738,8 @@ async function runAI(){
           _objectUrl:pd.url,videoEl:null,videoSnap:null,videoPlaying:false,src:pd.url
         };
         const v=document.createElement('video');
-        v.src=pd.url;v.muted=true;v.preload='metadata';
-        n.videoEl=v;
+        v.src=pd.url;
+        attachVideo(n,v);
         nodes.push(n);setSelection([n]);
         saveProjects();
         draw();
@@ -894,6 +933,33 @@ function drawEdge(a,b,o){
   ctx.restore();
 }
 
+// 卡片尺寸按素材宽高比自适应（面积大致恒定，以卡片中心为锚点）
+function fitNodeByAspect(n,mw,mh){
+  if(!mw||!mh)return;
+  const ar=mw/mh;
+  const A=180*140;
+  const cx=n.x+n.w/2,cy=n.y+n.h/2;
+  n.w=Math.max(90,Math.min(460,Math.round(Math.sqrt(A*ar))));
+  n.h=Math.round(A/n.w);
+  n.x=Math.round(cx-n.w/2);n.y=Math.round(cy-n.h/2);
+  scheduleSave();
+}
+// 素材按 cover 方式铺满整张卡片：等比放大到盖住卡片，多余部分裁掉
+function drawCover(el,n){
+  const iw=el.videoWidth||el.naturalWidth||el.width;
+  const ih=el.videoHeight||el.naturalHeight||el.height;
+  if(!iw||!ih)return;
+  const s=Math.max(n.w/iw,n.h/ih);
+  try{ctx.drawImage(el,n.x+(n.w-iw*s)/2,n.y+(n.h-ih*s)/2,iw*s,ih*s);}catch(e){}
+}
+// 创建视频元素并挂上元数据回调，让卡片跟随视频真实宽高比
+function attachVideo(n,v){
+  v.muted=true;v.preload='metadata';
+  v.addEventListener('loadedmetadata',()=>{
+    if(v.videoWidth)fitNodeByAspect(n,v.videoWidth,v.videoHeight);
+  });
+  n.videoEl=v;
+}
 function draw(){
   ctx.setTransform(1,0,0,1,0,0);
   ctx.fillStyle='#0a0b10';
@@ -921,14 +987,7 @@ function draw(){
     roundRect(n.x,n.y,n.w,n.h,10);
     ctx.fill();
     const isSel=selectedNodes.has(n);
-    ctx.strokeStyle=isSel?'#7c3aed':'#444b66';
-    if(connectPendingNode===n)ctx.strokeStyle='#22c55e';
-    ctx.lineWidth=(isSel?(lastSelected===n?3:2):2)/zoom;
-    roundRect(n.x,n.y,n.w,n.h,10);
-    ctx.stroke();
-    ctx.fillStyle='#fff';
-    ctx.font='14px system-ui';
-    ctx.fillText(n.title,n.x+10,n.y+22);
+    let mediaEl=null;
     if(n.type==='img'&&n.src){
       if(!imgCache[n.src]){
         imgCache[n.src]=new Image();
@@ -936,16 +995,37 @@ function draw(){
       }
       const im=imgCache[n.src];
       if(im.complete&&im.naturalWidth>0){
-        try{ctx.drawImage(im,n.x+10,n.y+30,n.w-20,n.h-40);}catch(e){}
+        if(!n._fitted){fitNodeByAspect(n,im.naturalWidth,im.naturalHeight);n._fitted=true;}
+        mediaEl=im;
       }
     }else if(n.isVideo&&n.videoSnap){
-      try{ctx.drawImage(n.videoSnap,n.x+10,n.y+30,n.w-20,n.h-40);}catch(e){}
-    }else if(n.type==='text'&&n.text){
+      mediaEl=n.videoSnap;
+    }
+    if(mediaEl){
+      ctx.save();
+      roundRect(n.x,n.y,n.w,n.h,10);
+      ctx.clip();
+      drawCover(mediaEl,n);
+      ctx.restore();
+    }
+    if(n.type==='text'&&n.text){
       ctx.fillStyle="#cdd5e1";
       ctx.font="12px system-ui";
       const t=n.text.slice(0,60)+(n.text.length>60?"...":"");
-      ctx.fillText(t,n.x+10,n.y+40);
+      ctx.fillText(t,n.x+10,n.y+44);
     }
+    ctx.font='12px system-ui';
+    const tw=ctx.measureText(n.title).width;
+    ctx.fillStyle='rgba(10,11,16,.62)';
+    roundRect(n.x+6,n.y+6,Math.min(tw+14,n.w-12),20,6);
+    ctx.fill();
+    ctx.fillStyle='#fff';
+    ctx.fillText(n.title,n.x+13,n.y+20);
+    ctx.strokeStyle=isSel?'#7c3aed':'#444b66';
+    if(connectPendingNode===n)ctx.strokeStyle='#22c55e';
+    ctx.lineWidth=(isSel?(lastSelected===n?3:2):2)/zoom;
+    roundRect(n.x,n.y,n.w,n.h,10);
+    ctx.stroke();
     if(marquee&&marquee.active&&marquee.hits&&marquee.hits.indexOf(n)>-1){
       ctx.strokeStyle='#a78bfa';
       ctx.lineWidth=2/zoom;
