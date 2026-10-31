@@ -48,6 +48,16 @@ body{overflow:hidden;background:#0a0b10;color:#fff;height:100vh}
 #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 .hint-bar{position:fixed;right:12px;bottom:16px;font-size:11px;color:#6b7488;background:rgba(20,22,31,.85);padding:7px 11px;border-radius:8px;border:1px solid #252a3d;z-index:10;line-height:1.7}
 .hint-bar b{color:#9aa4bd;font-weight:500}
+.wait-mask{position:fixed;inset:0;background:rgba(5,6,10,.72);display:none;align-items:center;justify-content:center;z-index:400}
+.wait-mask.show{display:flex}
+.wait-box{background:#1c2030;border:1px solid #3d4358;border-radius:14px;padding:24px 28px;width:380px;text-align:center;box-shadow:0 18px 50px rgba(0,0,0,.6)}
+.wait-spin{width:46px;height:46px;margin:0 auto 14px;border:4px solid #3d4358;border-top-color:#7c3aed;border-radius:50%;animation:wa-spin 1s linear infinite}
+@keyframes wa-spin{to{transform:rotate(360deg)}}
+.wait-title{font-size:15px;margin-bottom:6px}
+.wait-msg{font-size:13px;color:#c3cbdc;min-height:20px;line-height:1.6}
+.wait-sub{font-size:12px;color:#8892ab;margin:8px 0 16px}
+.wait-cancel{background:#2d3348;color:#ffd7d7;border:1px solid #4a3550;padding:7px 18px;border-radius:6px;cursor:pointer;font-size:13px}
+.wait-cancel:hover{background:#dc2626;color:#fff}
 </style>
 </head>
 <body>
@@ -67,12 +77,15 @@ body{overflow:hidden;background:#0a0b10;color:#fff;height:100vh}
   <button onclick="zoomOut()">-</button>
   <span id="zoomLabel">100%</span>
   <button onclick="zoomIn()">+</button>
-  <button onclick="fitView()">⛶</button>
+  <button onclick="fitContent()" title="定位到全部内容">⛶</button>
 </div>
 <div class="hint-bar">
   <div><b>左键拖拽</b> 框选 · <b>Shift</b> 追加</div>
   <div><b>中键</b> 或 <b>空格+左键</b> 平移</div>
   <div><b>右键</b> 菜单 · <b>滚轮</b> 缩放</div>
+  <div><b>拖拽圆点</b> 连线 · <b>单击连线</b> 选中</div>
+  <div><b>Delete</b> 删除选中连线 · <b>Esc</b> 取消</div>
+  <div><b>左下角导航图</b> 点击/拖拽瞬移 · <b>⛶</b> 定位全部内容</div>
 </div>
 <div class="modal" id="aiModal">
   <div class="modal-content">
@@ -142,6 +155,15 @@ body{overflow:hidden;background:#0a0b10;color:#fff;height:100vh}
 
 <div class="ctx-menu" id="ctxMenu"></div>
 <div id="toast"></div>
+<div class="wait-mask" id="waitMask">
+  <div class="wait-box">
+    <div class="wait-spin"></div>
+    <div class="wait-title">视频生成排队中</div>
+    <div class="wait-msg" id="waitMsg">正在提交任务…</div>
+    <div class="wait-sub" id="waitSub">已等待 00:00</div>
+    <button class="wait-cancel" onclick="cancelWait()">取消任务</button>
+  </div>
+</div>
 
 <script>
 const cv=document.getElementById('cv'),ctx=cv.getContext('2d');
@@ -164,6 +186,9 @@ let currentProjectId=null;
 let activeVideoNode=null;
 let rafId=null;
 let connectPendingNode=null;
+let portDrag=null;
+let navDown=false;
+let selectedEdge=null;
 let editTargetNode=null;
 const API_BASE='http://127.0.0.1:1241/v1';
 const API_KEY='sk-pVsYipjj0gZgzf9xionpcneAekuTyWEpr5G7RAwbBOcRrhr1';
@@ -308,6 +333,7 @@ function loadProject(id){
     ensureVideoEl(n);
   });
   edges=deserializeEdges(d.edges,nodes);
+  selectedEdge=null;portDrag=null;
   camX=d.camX||0;camY=d.camY||0;zoom=d.zoom||1;
   currentProjectId=id;
   localStorage.setItem('pavo_last',id);
@@ -390,6 +416,8 @@ function delSel(){
     if(i>-1)nodes.splice(i,1);
   });
   edges=edges.filter(e=>!sel.includes(e.a)&&!sel.includes(e.b));
+  if(selectedEdge&&!edges.includes(selectedEdge))selectedEdge=null;
+  if(portDrag&&sel.includes(portDrag.node))portDrag=null;
   if(connectPendingNode&&sel.includes(connectPendingNode))connectPendingNode=null;
   setSelection([]);
   saveProjects();
@@ -537,6 +565,7 @@ function importJSON(){
     const d=JSON.parse(await f.text());
     nodes=d.nodes||[];
     edges=deserializeEdges(d.edges,nodes);
+    selectedEdge=null;portDrag=null;
     camX=d.camX||0;camY=d.camY||0;zoom=d.zoom||1;
     connectPendingNode=null;
     setSelection([]);
@@ -554,7 +583,7 @@ function importJSON(){
 function zoomAt(factor,sx,sy){
   const px=(sx===undefined?W/2:sx),py=(sy===undefined?H/2:sy);
   const wx=(px-camX)/zoom,wy=(py-camY)/zoom;
-  zoom=Math.min(4,Math.max(0.1,zoom*factor));
+  zoom=Math.min(20,Math.max(0.01,zoom*factor));
   camX=px-wx*zoom;
   camY=py-wy*zoom;
   updateZoomText();
@@ -562,6 +591,19 @@ function zoomAt(factor,sx,sy){
 function zoomIn(){zoomAt(1.1)}
 function zoomOut(){zoomAt(1/1.1)}
 function fitView(){zoom=1;camX=0;camY=0;updateZoomText();draw()}
+// 缩放到恰好框住全部节点（四周留边距），空画布则回原点
+function fitContent(){
+  if(!nodes.length){fitView();return;}
+  let a=Infinity,b=Infinity,c=-Infinity,d=-Infinity;
+  nodes.forEach(n=>{a=Math.min(a,n.x);b=Math.min(b,n.y);c=Math.max(c,n.x+n.w);d=Math.max(d,n.y+n.h);});
+  const pad=80;a-=pad;b-=pad;c+=pad;d+=pad;
+  zoom=Math.min(20,Math.max(0.01,Math.min(W/(c-a),H/(d-b))));
+  camX=(W-(a+c)*zoom)/2;
+  camY=(H-(b+d)*zoom)/2;
+  updateZoomText();
+  draw();
+  toast('已定位到全部内容');
+}
 function updateZoomText(){document.getElementById('zoomLabel').innerText=Math.round(zoom*100)+'%'}
 
 function uploadAIRef(){
@@ -695,67 +737,119 @@ async function runAI(){
   };
   if(videoMode==="keyframe")payload.image=refImageB64;
   if(videoMode==="reference")payload.video=refVideoB64;
-  const MAX_RETRY=8;
+  const ctl=beginWait('视频生成排队中');
+  if(!ctl){toast('已有任务在排队，请等它完成或先取消');return;}
   const RETRY_WAIT=20000;
-  let retryCount=0;
+  const pollBase=API_BASE.replace('/v1','');
+  // 参考素材已转成 base64 写进 payload，原引用可释放
+  refImageBlob=null;refVideoBlob=null;
+
+  function later(fn,ms){
+    if(!waitCtl||waitCtl.cancelled)return;
+    setTimeout(()=>{if(waitCtl&&!waitCtl.cancelled)fn();},ms);
+  }
   async function submitTask(){
-    const res=await fetch(API_BASE+"/videos",{
-      method:"POST",
-      headers:{"Authorization":"Bearer "+API_KEY,"Content-Type":"application/json"},
-      body:JSON.stringify(payload)
-    });
-    const data=await res.json();
-    if(!res.ok){
-      if(data.code==="video_queue_full"){
-        retryCount++;
-        if(retryCount<=MAX_RETRY){
-          alert('队列已满，'+(RETRY_WAIT/1000)+'秒后自动重试 '+retryCount+'/'+MAX_RETRY+'\n不要关闭页面！');
-          setTimeout(submitTask,RETRY_WAIT);
-          return;
-        }else{
-          alert("多次重试仍然队列满，本次任务终止，稍后再来！");
-          refImageBlob=null;refVideoBlob=null;
-          return;
-        }
-      }else{
-        alert("提交失败："+JSON.stringify(data));
-        refImageBlob=null;refVideoBlob=null;
-        return;
-      }
-    }
-    const vid=data.video_id;
-    const pollBase=API_BASE.replace('/v1','');
-    async function poll(){
-      const pr=await fetch(pollBase+"/agnesapi?video_id="+vid+"&model_name=agnes-video-2.5-flash",{
+    if(!waitCtl||waitCtl.cancelled)return;
+    let res=null,data=null,nerr=null;
+    try{
+      res=await fetch(API_BASE+"/videos",{
+        method:"POST",
+        headers:{"Authorization":"Bearer "+API_KEY,"Content-Type":"application/json"},
+        body:JSON.stringify(payload)
+      });
+      data=await res.json();
+    }catch(e){nerr=e;}
+    if(!waitCtl||waitCtl.cancelled)return;
+    if(res&&res.ok&&data&&data.video_id){poll(data.video_id);return;}
+    waitCtl.tries++;
+    waitSubTick();
+    if(nerr){waitMsg('网络异常，持续重试中…');}
+    else if(data&&data.code==='video_queue_full'){waitMsg('使用的人太多，队列已满，排队重试中…');}
+    else{waitMsg('暂未提交成功：'+JSON.stringify(data||{}).slice(0,90)+'，持续重试…');}
+    later(submitTask,RETRY_WAIT);
+  }
+  async function poll(vid){
+    if(!waitCtl||waitCtl.cancelled)return;
+    let pr=null,pd=null,nerr=null;
+    try{
+      pr=await fetch(pollBase+"/agnesapi?video_id="+vid+"&model_name=agnes-video-2.5-flash",{
         headers:{"Authorization":"Bearer "+API_KEY}
       });
-      const pd=await pr.json();
-      if(pd.status==="completed"){
-        const c=getViewCenterPos();
-        const n={
-          x:c.x-90,y:c.y-70,w:180,h:140,
-          title:"AI生成视频",type:"video",isVideo:true,
-          _objectUrl:pd.url,videoEl:null,videoSnap:null,videoPlaying:false,src:pd.url
-        };
-        const v=document.createElement('video');
-        v.src=pd.url;
-        attachVideo(n,v);
-        nodes.push(n);setSelection([n]);
-        saveProjects();
-        draw();
-        alert("✅ 视频生成完成！");
-        refImageBlob=null;refVideoBlob=null;
-      }else if(pd.status==="failed"){
-        alert("生成失败："+((pd.error&&pd.error.message)||"未知错误"));
-        refImageBlob=null;refVideoBlob=null;
-      }else{
-        setTimeout(poll,1500);
-      }
+      pd=await pr.json();
+    }catch(e){nerr=e;}
+    if(!waitCtl||waitCtl.cancelled)return;
+    if(nerr||(pr&&!pr.ok)){
+      waitCtl.tries++;
+      waitMsg('查询进度异常，继续等待…');
+      later(()=>poll(vid),3000);
+      return;
     }
-    poll();
+    if(pd.status==="completed"){
+      const c=getViewCenterPos();
+      const n={
+        x:c.x-90,y:c.y-70,w:180,h:140,
+        title:"AI生成视频",type:"video",isVideo:true,
+        _objectUrl:pd.url,videoEl:null,videoSnap:null,videoPlaying:false,src:pd.url
+      };
+      const v=document.createElement('video');
+      v.src=pd.url;
+      attachVideo(n,v);
+      nodes.push(n);setSelection([n]);
+      saveProjects();
+      draw();
+      endWait();
+      toast('✅ 视频生成完成，已加入画布');
+    }else if(pd.status==="failed"){
+      waitCtl.tries++;
+      waitMsg('本轮生成失败：'+((pd.error&&pd.error.message)||'未知错误')+'，重新排队…');
+      later(submitTask,RETRY_WAIT);
+    }else{
+      waitMsg('排队/生成中，请耐心等待…');
+      later(()=>poll(vid),1500);
+    }
   }
   submitTask();
   closeAIModal();
+}
+
+// ---- 生成排队等待遮罩：无限重试直到出片 ----
+let waitCtl=null;
+function fmtMs(ms){
+  const s=Math.floor(ms/1000);
+  return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');
+}
+function beginWait(title){
+  if(waitCtl&&!waitCtl.cancelled)return null;
+  const ctl={cancelled:false,t0:Date.now(),tries:0,timer:null};
+  waitCtl=ctl;
+  const mask=document.getElementById('waitMask');
+  mask.querySelector('.wait-title').innerText=title;
+  mask.querySelector('.wait-msg').innerText='正在提交任务…';
+  mask.classList.add('show');
+  ctl.timer=setInterval(()=>{
+    document.getElementById('waitSub').innerText='已等待 '+fmtMs(Date.now()-ctl.t0)+' · 重试 '+ctl.tries+' 次';
+  },1000);
+  return ctl;
+}
+function waitSubTick(){
+  if(!waitCtl)return;
+  document.getElementById('waitSub').innerText='已等待 '+fmtMs(Date.now()-waitCtl.t0)+' · 重试 '+waitCtl.tries+' 次';
+}
+function waitMsg(msg){
+  const el=document.getElementById('waitMsg');
+  if(el)el.innerText=msg;
+}
+function endWait(){
+  if(waitCtl&&waitCtl.timer)clearInterval(waitCtl.timer);
+  waitCtl=null;
+  document.getElementById('waitMask').classList.remove('show');
+}
+function cancelWait(){
+  if(!waitCtl)return;
+  waitCtl.cancelled=true;
+  endWait();
+  refImageBlob=null;refVideoBlob=null;
+  toast('已取消排队任务');
 }
 
 function openEditModal(node){
@@ -809,6 +903,11 @@ function buildMenuItems(target){
     items.push({label:'置于底层',icon:'⬇️',action:sendToBack});
     items.push({sep:true});
     items.push({label:selCount>1?'删除所选 '+selCount+' 个节点':'删除节点',icon:'🗑',hint:'Delete',danger:true,action:delSel});
+  }else if(target.type==='edge'){
+    items.push({label:'删除这条连线',icon:'✂️',danger:true,action:()=>deleteEdge(target.edge)});
+    if(selectedEdge!==target.edge){
+      items.push({label:'选中这条连线',icon:'👆',hint:'Delete可删',action:()=>{selectedEdge=target.edge;setSelection([]);draw();}});
+    }
   }else{
     items.push({label:'在此处新增节点',icon:'＋',action:()=>addNodeAt(target.worldPos)});
     items.push({label:'AI 生成分镜',icon:'✨',action:openAIModal});
@@ -832,6 +931,8 @@ function openCtxMenu(x,y){
   if(ctxTarget.type==='node'){
     const c=selectedNodes.size;
     title.innerText=c>1?('已选中 '+c+' 个节点'):(ctxTarget.node.title||'节点');
+  }else if(ctxTarget.type==='edge'){
+    title.innerText='连线：'+(ctxTarget.edge.a.title||'?')+' → '+(ctxTarget.edge.b.title||'?');
   }else{
     title.innerText='画布';
   }
@@ -905,9 +1006,10 @@ function edgeCurve(a,b){
 function drawPorts(n){
   const R=5,col='#7c3aed';
   [{x:n.x,y:n.y+n.h/2},{x:n.x+n.w,y:n.y+n.h/2}].forEach(p=>{
+    const hot=portDrag&&portDrag.node===n&&Math.hypot(p.x-portDrag.pos.x,p.y-portDrag.pos.y)<2;
     ctx.beginPath();
-    ctx.arc(p.x,p.y,R,0,Math.PI*2);
-    ctx.fillStyle=col;
+    ctx.arc(p.x,p.y,hot?R+2.5:R,0,Math.PI*2);
+    ctx.fillStyle=hot?'#a78bfa':col;
     ctx.fill();
     ctx.lineWidth=1.5/zoom;
     ctx.strokeStyle='#0a0b10';
@@ -960,6 +1062,46 @@ function attachVideo(n,v){
   });
   n.videoEl=v;
 }
+// 端口命中：世界坐标下找半径内最近的圆点
+function portAt(m){
+  const r=9/zoom;
+  let best=null,bd=r;
+  for(let i=nodes.length-1;i>=0;i--){
+    const n=nodes[i];
+    const pts=[{x:n.x,y:n.y+n.h/2},{x:n.x+n.w,y:n.y+n.h/2}];
+    for(const p of pts){
+      const d=Math.hypot(m.x-p.x,m.y-p.y);
+      if(d<=bd){bd=d;best={node:n,pos:p};}
+    }
+  }
+  return best;
+}
+function bezPoint(a,c1,c2,b,t){
+  const u=1-t;
+  return {
+    x:u*u*u*a.x+3*u*u*t*c1.x+3*u*t*t*c2.x+t*t*t*b.x,
+    y:u*u*u*a.y+3*u*u*t*c1.y+3*u*t*t*c2.y+t*t*t*b.y
+  };
+}
+// 连线命中：沿贝塞尔曲线采样，判断点是否落在线上
+function edgeNearPoint(m){
+  const r=6/zoom;
+  for(const e of edges){
+    if(!e.a||!e.b)continue;
+    const ap=edgeAnchors(e),c=edgeCurve(ap.a,ap.b);
+    for(let t=0;t<=1.0001;t+=0.04){
+      const p=bezPoint(ap.a,c.c1,c.c2,ap.b,t);
+      if(Math.hypot(p.x-m.x,p.y-m.y)<=r)return e;
+    }
+  }
+  return null;
+}
+function deleteEdge(e){
+  edges=edges.filter(x=>x!==e);
+  if(selectedEdge===e)selectedEdge=null;
+  saveProjects();draw();
+  toast('连线已删除');
+}
 function draw(){
   ctx.setTransform(1,0,0,1,0,0);
   ctx.fillStyle='#0a0b10';
@@ -969,18 +1111,24 @@ function draw(){
   ctx.scale(zoom,zoom);
   ctx.strokeStyle='#22283b';
   ctx.lineWidth=1/zoom;
-  const gs=40;
-  for(let x=-2000;x<2000;x+=gs){
-    ctx.beginPath();ctx.moveTo(x,-2000);ctx.lineTo(x,2000);ctx.stroke();
-  }
-  for(let y=-2000;y<2000;y+=gs){
-    ctx.beginPath();ctx.moveTo(-2000,y);ctx.lineTo(2000,y);ctx.stroke();
-  }
+  let gs=40;
+  const sz=gs*zoom;
+  if(sz<18){while(gs*zoom<18)gs*=5;}
+  else if(sz>90){while(gs*zoom>90)gs/=5;}
+  const vl=-camX/zoom, vt=-camY/zoom;
+  const vr=(W-camX)/zoom, vb=(H-camY)/zoom;
+  const x0=Math.floor(vl/gs)*gs, x1=Math.ceil(vr/gs)*gs;
+  const y0=Math.floor(vt/gs)*gs, y1=Math.ceil(vb/gs)*gs;
+  ctx.beginPath();
+  for(let x=x0;x<=x1;x+=gs){ctx.moveTo(x,vt);ctx.lineTo(x,vb);}
+  for(let y=y0;y<=y1;y+=gs){ctx.moveTo(vl,y);ctx.lineTo(vr,y);}
+  ctx.stroke();
   const edgeFlow=(performance.now()/45)%13;
   edges.forEach(e=>{
     if(!e.a||!e.b)return;
     const ap=edgeAnchors(e);
-    drawEdge(ap.a,ap.b,{flow:-edgeFlow});
+    if(e===selectedEdge)drawEdge(ap.a,ap.b,{flow:-edgeFlow,color:'#f87171',width:3.5});
+    else drawEdge(ap.a,ap.b,{flow:-edgeFlow});
   })
   nodes.forEach(n=>{
     ctx.fillStyle='#1c2030';
@@ -1036,6 +1184,23 @@ function draw(){
     }
   })
   nodes.forEach(n=>drawPorts(n));
+  if(portDrag){
+    const tgt=hitNode({x:portDrag.mx,y:portDrag.my});
+    const b=(tgt&&tgt!==portDrag.node)?edgeAnchors({a:portDrag.node,b:tgt}).b:{x:portDrag.mx,y:portDrag.my};
+    if(tgt&&tgt!==portDrag.node){
+      ctx.save();
+      roundRect(tgt.x-3,tgt.y-3,tgt.w+6,tgt.h+6,12);
+      ctx.strokeStyle='#22c55e';
+      ctx.lineWidth=2.5/zoom;
+      ctx.stroke();
+      ctx.restore();
+    }
+    drawEdge(portDrag.pos,b,{alpha:.85,color:'#a78bfa'});
+    ctx.save();
+    ctx.beginPath();ctx.arc(b.x,b.y,5,0,Math.PI*2);
+    ctx.fillStyle='#a78bfa';ctx.fill();
+    ctx.restore();
+  }
   ctx.restore();
 
   if(marquee&&marquee.active){
@@ -1054,6 +1219,8 @@ function draw(){
     ctx.restore();
   }
 
+  drawMinimap();
+
   if(connectPendingNode){
     ctx.save();
     ctx.fillStyle='rgba(34,197,94,.95)';
@@ -1061,6 +1228,59 @@ function draw(){
     ctx.fillText('连线模式：已选起点「'+connectPendingNode.title+'」，点击或右键另一个节点完成连线（Esc 取消）',14,72);
     ctx.restore();
   }
+}
+// ---- 迷你导航图（左下角）----
+function navRect(){
+  let a=Infinity,b=Infinity,c=-Infinity,d=-Infinity;
+  nodes.forEach(n=>{a=Math.min(a,n.x);b=Math.min(b,n.y);c=Math.max(c,n.x+n.w);d=Math.max(d,n.y+n.h);});
+  if(!isFinite(a)){a=-400;b=-300;c=400;d=300;}
+  const w=c-a||1,h=d-b||1;
+  const m=Math.min(w,h)*0.12||60;
+  a-=m;b-=m;c+=m;d+=m;
+  const vl=-camX/zoom,vt=-camY/zoom,vr=(W-camX)/zoom,vb=(H-camY)/zoom;
+  a=Math.min(a,vl);b=Math.min(b,vt);c=Math.max(c,vr);d=Math.max(d,vb);
+  return {x0:a,y0:b,x1:c,y1:d};
+}
+function navDisp(){
+  const nb=navRect();
+  const maxW=180,maxH=124,pad=12;
+  const s=Math.min(maxW/(nb.x1-nb.x0),maxH/(nb.y1-nb.y0));
+  const w=(nb.x1-nb.x0)*s,h=(nb.y1-nb.y0)*s;
+  const left=pad,top=H-pad-h-6;
+  return {left,top,w,h,nb};
+}
+function drawMinimap(){
+  const nd=navDisp(),nb=nd.nb;
+  ctx.save();
+  ctx.fillStyle='rgba(20,22,31,.88)';
+  ctx.strokeStyle='#2d3348';
+  ctx.lineWidth=1;
+  roundRect(nd.left-6,nd.top-6,nd.w+12,nd.h+12,8);
+  ctx.fill();ctx.stroke();
+  const sx=v=>nd.left+(v-nb.x0)/(nb.x1-nb.x0)*nd.w;
+  const sy=v=>nd.top+(v-nb.y0)/(nb.y1-nb.y0)*nd.h;
+  ctx.fillStyle='#444b66';
+  nodes.forEach(n=>{
+    ctx.fillRect(sx(n.x),sy(n.y),
+      Math.max(2,sx(n.x+n.w)-sx(n.x)),
+      Math.max(2,sy(n.y+n.h)-sy(n.y)));
+  });
+  ctx.strokeStyle='#7c3aed';
+  ctx.lineWidth=1.5;
+  ctx.strokeRect(sx(-camX/zoom),sy(-camY/zoom),
+    (W/zoom)/(nb.x1-nb.x0)*nd.w,(H/zoom)/(nb.y1-nb.y0)*nd.h);
+  ctx.restore();
+}
+function navHit(px,py){
+  const nd=navDisp();
+  return px>=nd.left-6&&px<=nd.left+nd.w+6&&py>=nd.top-6&&py<=nd.top+nd.h+6;
+}
+function navSetView(px,py){
+  const nd=navDisp(),nb=nd.nb;
+  const wx=nb.x0+(px-nd.left)/nd.w*(nb.x1-nb.x0);
+  const wy=nb.y0+(py-nd.top)/nd.h*(nb.y1-nb.y0);
+  camX=W/2-wx*zoom;
+  camY=H/2-wy*zoom;
 }
 function startLoop(){
   if(rafId)return;
@@ -1072,8 +1292,9 @@ cv.addEventListener('contextmenu',e=>{
   e.preventDefault();
   const m=world(e.offsetX,e.offsetY);
   const hit=hitNode(m);
+  const ce=hit?null:edgeNearPoint(m);
   if(hit&&!selectedNodes.has(hit))setSelection([hit]);
-  ctxTarget={type:hit?'node':'canvas',node:hit,worldPos:m};
+  ctxTarget={type:hit?'node':(ce?'edge':'canvas'),node:hit,edge:ce,worldPos:m};
   openCtxMenu(e.clientX,e.clientY);
   draw();
 });
@@ -1089,6 +1310,18 @@ cv.addEventListener('mousedown',e=>{
     return;
   }
   if(e.button!==0)return;
+  if(navHit(sp.x,sp.y)){
+    navDown=true;
+    navSetView(sp.x,sp.y);
+    draw();
+    return;
+  }
+  const port=portAt(m);
+  if(port){
+    portDrag={node:port.node,pos:port.pos,mx:m.x,my:m.y};
+    draw();
+    return;
+  }
   const hit=hitNode(m);
   if(hit){
     if(e.shiftKey&&selectedNodes.has(hit)){
@@ -1117,6 +1350,8 @@ cv.addEventListener('mousedown',e=>{
 cv.addEventListener('mousemove',e=>{
   const sp={x:e.offsetX,y:e.offsetY};
   const m=world(sp.x,sp.y);
+  if(navDown){navSetView(sp.x,sp.y);return;}
+  if(portDrag){portDrag.mx=m.x;portDrag.my=m.y;return;}
   if(dragNodes&&pressInfo){
     if(!pressInfo.moved&&Math.hypot(sp.x-pressInfo.x,sp.y-pressInfo.y)>3)pressInfo.moved=true;
     if(pressInfo.moved){
@@ -1143,9 +1378,30 @@ cv.addEventListener('mousemove',e=>{
     }
     return;
   }
+  if(navHit(sp.x,sp.y)){cv.style.cursor='pointer';return;}
+  cv.style.cursor=portAt(m)?'grab':'crosshair';
 });
 
 window.addEventListener('mouseup',e=>{
+  if(navDown){
+    navDown=false;
+    saveProjects();
+    return;
+  }
+  if(portDrag){
+    const rect=cv.getBoundingClientRect();
+    const m=world(e.clientX-rect.left,e.clientY-rect.top);
+    const tgt=hitNode(m);
+    const from=portDrag.node;
+    portDrag=null;
+    if(tgt&&tgt!==from){
+      const dup=edges.some(ed=>(ed.a===from&&ed.b===tgt)||(ed.a===tgt&&ed.b===from));
+      if(dup)toast('这两个节点之间已有连线');
+      else{edges.push({a:from,b:tgt});saveProjects();toast('连线完成');}
+    }
+    draw();
+    return;
+  }
   if(dragNodes){
     if(pressInfo&&pressInfo.moved)saveProjects();
     dragNodes=null;dragN=null;pressInfo=null;
@@ -1169,7 +1425,10 @@ window.addEventListener('mouseup',e=>{
       else if(!mq.additive)setSelection([]);
       if(hits.length)toast('框选了 '+selectedNodes.size+' 个节点');
     }else if(!mq.additive){
-      setSelection([]);
+      const mqm=world(mq.x0,mq.y0);
+      const ce=edgeNearPoint(mqm);
+      if(ce){selectedEdge=ce;selectedNodes.clear();selected=null;lastSelected=null;toast('已选中连线，按 Delete 键或右键可删除');}
+      else{selectedEdge=null;setSelection([]);}
     }
     pressInfo=null;
     draw();
@@ -1177,6 +1436,7 @@ window.addEventListener('mouseup',e=>{
 });
 
 cv.addEventListener('dblclick',e=>{
+  if(navHit(e.offsetX,e.offsetY))return;
   const m=world(e.offsetX,e.offsetY);
   const hit=hitNode(m);
   if(hit){openEditModal(hit);return;}
@@ -1205,11 +1465,14 @@ window.addEventListener('keydown',e=>{
   else if(mod&&k==='v'){e.preventDefault();pasteClipboard();}
   else if(mod&&k==='d'){e.preventDefault();duplicateSelection();}
   else if(e.key==='Delete'||e.key==='Backspace'){
-    if(selectedNodes.size){e.preventDefault();delSel();}
+    if(selectedEdge){e.preventDefault();deleteEdge(selectedEdge);}
+    else if(selectedNodes.size){e.preventDefault();delSel();}
   }
   else if(e.key==='Escape'){
     closeCtxMenu();
+    portDrag=null;
     if(connectPendingNode){connectPendingNode=null;toast('已取消连线起点');}
+    else if(selectedEdge){selectedEdge=null;}
     else if(selectedNodes.size)setSelection([]);
     draw();
   }
