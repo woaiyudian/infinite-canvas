@@ -86,6 +86,7 @@ body{overflow:hidden;background:#0a0b10;color:#fff;height:100vh;height:100dvh;ov
   <button class="tool-btn" onclick="delSel()" title="删除选中">🗑</button>
   <button class="tool-btn" onclick="uploadAsset()" title="上传图片/视频素材">🖼</button>
   <button class="tool-btn" onclick="exportPNG()" title="导出画布截图">📸</button>
+  <button class="tool-btn" onclick="exportSelectedContents()" title="导出选中卡片的内容(文字/图片/视频)">📤</button>
   <button class="tool-btn" onclick="exportJSON()" title="导出项目文件">💾</button>
   <button class="tool-btn" onclick="importJSON()" title="导入项目文件">📂</button>
 </div>
@@ -599,6 +600,90 @@ function uploadAsset(){
   }
   i.click();
 }
+// 文件名去掉非法字符
+function safeFileName(s){
+  return String(s||'节点').replace(/[\\/:*?"<>|]/g,'_').slice(0,80);
+}
+// MIME → 常用扩展名
+function mimeExt(m){
+  const map={
+    'image/png':'png','image/jpeg':'jpg','image/webp':'webp','image/gif':'gif',
+    'video/mp4':'mp4','video/webm':'webm','video/quicktime':'mov',
+    'audio/mpeg':'mp3','audio/mp3':'mp3','audio/wav':'wav','audio/x-m4a':'m4a','audio/aac':'aac','audio/ogg':'ogg',
+    'text/plain':'txt','text/markdown':'md','text/csv':'csv','application/json':'json',
+    'application/pdf':'pdf','application/msword':'doc',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document':'docx',
+    'application/vnd.ms-excel':'xls',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':'xlsx',
+    'application/zip':'zip'
+  };
+  return map[m]||'';
+}
+function dlBlob(blob,name){
+  const a=document.createElement('a');
+  a.download=name;
+  a.href=URL.createObjectURL(blob);
+  a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+}
+// 导出单张卡片内容：文字→txt，图片/视频→媒体文件，本地文件→原文件
+async function exportNodeContent(n){
+  if(!n)return toast('请先选中要导出的卡片');
+  const base=safeFileName(n.title);
+  if(n.type==='text'&&!n._fileId){
+    const body=(n.text||'').trim();
+    if(!body)return toast('这张文字卡还没有内容');
+    dlBlob(new Blob(['【'+(n.title||'')+'】\n'+body],{type:'text/plain;charset=utf-8'}),base+'.txt');
+    return toast('已导出文字卡：'+base+'.txt');
+  }
+  // 本地上传的文件优先从库里取原件
+  if(n._fileId){
+    try{
+      const b=await fileDB.get(n._fileId);
+      if(b){
+        // 优先用上传时记录的 MIME 推断扩展名
+        let ext=((n.fileMime&&mimeExt(n.fileMime))||(n.type==='img'?'png':n.type==='video'?'mp4':n.type==='audio'?'mp3':n.type==='text'?'txt':'dat'));
+        const name=/\.[a-z0-9]{2,5}$/i.test(base)?base:base+'.'+ext;
+        dlBlob(b,name);
+        return toast('已导出本地文件：'+name);
+      }
+    }catch(e){}
+  }
+  if(n.src&&(n.type==='img'||n.isVideo||n.type==='video')){
+    try{
+      const r=await fetch(n.src);
+      if(!r.ok)throw new Error('HTTP '+r.status);
+      const b=await r.blob();
+      const ext=n.isVideo||n.type==='video'?'mp4':(/webp/i.test(b.type)?'webp':/gif/i.test(b.type)?'gif':'png');
+      dlBlob(b,base+'.'+ext);
+      return toast('已导出'+(n.isVideo||n.type==='video'?'视频':'图片')+'：'+base+'.'+ext);
+    }catch(e){
+      // 跨域拿不到二进制就新标签打开 + 复制链接
+      const w=window.open(n.src,'_blank');
+      try{await navigator.clipboard.writeText(n.src);}catch(_){}
+      toast('媒体地址受跨域限制无法直接下载'+(w?'，已在新标签打开，链接已复制到剪贴板':'，链接已复制到剪贴板'));
+      return;
+    }
+  }
+  if(n.src&&n.type==='doc'){openDocNode(n);return;}
+  if(n.src&&n.type==='audio'){
+    try{
+      const r=await fetch(n.src);
+      dlBlob(await r.blob(),base+'.mp3');
+      return toast('已导出音频：'+base);
+    }catch(e){return toast('音频文件已失效，请重新上传');}
+  }
+  toast('这张卡片还没有可导出的内容');
+}
+async function exportSelectedContents(){
+  const sel=[...selectedNodes];
+  if(!sel.length)return toast('请先选中要导出的卡片');
+  for(let i=0;i<sel.length;i++){
+    exportNodeContent(sel[i]);
+    if(i<sel.length-1)await new Promise(r=>setTimeout(r,500)); // 逐个下载防浏览器拦截
+  }
+  if(sel.length>1)toast('正在逐个导出 '+sel.length+' 张卡片内容…');
+}
 function exportPNG(){
   const a=document.createElement('a');
   a.download='pavo-canvas.png';
@@ -877,30 +962,39 @@ function linkedNodesOf(anchor){
   });
   return out;
 }
-async function collectLinkedRefs(){
-  const anchor=lastSelected||null;
+async function collectLinkedRefs(anchorHint){
+  const anchor=anchorHint||lastSelected||null;
   const pool=linkedNodesOf(anchor);
-  const imgs=[], texts=[];
+  const imgs=[], texts=[], diag=[];
+  diag.push('连线共 '+edges.length+' 条，锚点：'+(anchor?('「'+(anchor.title||'未命名卡')+'」(双击/选中卡)'):'无选中卡→收集全部连线节点'));
+  if(!edges.length)diag.push('画布还没有任何连线，无参考可带');
+  if(anchor&&pool.length===0)diag.push('锚点卡片没有任何连线，无参考可带');
   for(const n of pool){
+    const tag=(n.title||n.type||'?');
     if(n.isVideo||n.type==='video'){
-      // 已播放过的视频用当前画面快照作参考
       if(n.videoSnap){
-        try{imgs.push(n.videoSnap.toDataURL('image/jpeg',0.85));}catch(e){}
-      }
+        try{imgs.push(n.videoSnap.toDataURL('image/jpeg',0.85));diag.push('🎬 '+tag+'：画面快照已带上');}
+        catch(e){diag.push('🎬 '+tag+'：快照不可用(跨域限制被浏览器拒绝)');}
+      }else diag.push('🎬 '+tag+'：无画面快照，未带上');
       continue;
     }
-    if(n.src&&String(n.type).indexOf('img')>=0){
-      if(/^https?:/i.test(n.src)){imgs.push(n.src);}
+    if(n.type==='img'&&n.src){
+      if(/^https?:/i.test(n.src)){imgs.push(n.src);diag.push('🖼 '+tag+'：云端图 URL 已带上');}
       else if(n.src.startsWith('blob:')){
         try{
           const b=await(await fetch(n.src)).blob();
-          if(b.size<=8*1024*1024)imgs.push(await blobToBase64(b));
-        }catch(e){}
-      }
+          if(b.size<=8*1024*1024){imgs.push(await blobToBase64(b));diag.push('🖼 '+tag+'：本地图已转码带上');}
+          else diag.push('🖼 '+tag+'：本地图超 8MB，未带上');
+        }catch(e){diag.push('🖼 '+tag+'：本地图读取失败，未带上');}
+      }else diag.push('🖼 '+tag+'：地址格式未知，未带上');
     }
-    if(n.type==='text'&&n.text)texts.push(String(n.text).slice(0,2000));
+    if(n.type==='text'&&n.text){texts.push(String(n.text).slice(0,2000));diag.push('📃 '+tag+'：剧本文字已注入提示词');}
+    if(n.type==='audio'||n.type==='doc'||(n._fileId&&n.type!=='text'&&n.type!=='img'))diag.push((n.type==='audio'?'🎵':'📄')+' '+tag+'：模型不支持该类型，未带上');
   }
-  return {imgs:imgs.slice(0,2),texts:texts.slice(0,3),count:pool.length};
+  const kept=imgs.slice(0,2);
+  if(imgs.length>2)diag.push('图片参考超上限，只取前 2 张（首尾帧）');
+  diag.push('结果：图片参考 '+kept.length+' 张、文字参考 '+texts.length+' 段');
+  return {imgs:kept,texts:texts.slice(0,3),count:pool.length,diag:diag};
 }
 
 async function runAI(){
@@ -1021,9 +1115,11 @@ async function runAI(){
   }else{
     const refSel=document.getElementById('aiRefNode');
     if(!refSel||refSel.value!=='off'){
-      linkedRef=await collectLinkedRefs();
+      linkedRef=await collectLinkedRefs(pendingTarget);
       if(linkedRef.imgs.length===1){videoMode="keyframe";refImageB64=linkedRef.imgs[0];}
       else if(linkedRef.imgs.length>=2){videoMode="keyframe";refImageB64=linkedRef.imgs;}
+    }else{
+      linkedRef={imgs:[],texts:[],diag:['连线参考开关=关闭，本次不带画布连线内容']};
     }
   }
   let fullPrompt=prompt+(refTextExtra?('\n\n【参考剧本/资料】\n'+refTextExtra):'');
@@ -1042,8 +1138,10 @@ async function runAI(){
   if(videoMode==="reference")payload.video=refVideoB64;
   const ctl=beginWait('视频生成排队中');
   if(!ctl){toast('已有任务在排队，请等它完成或先取消');return;}
-  if(linkedRef&&linkedRef.imgs.length){
-    waitMsg('已自动带入 '+linkedRef.imgs.length+' 个连线画面作为'+(linkedRef.imgs.length>1?'首尾帧':'参考图'));
+  if(linkedRef){
+    const d=linkedRef.diag.join('\n');
+    waitMsg(linkedRef.imgs.length?('✅ 已自动带入 '+linkedRef.imgs.length+' 个连线画面作为'+(linkedRef.imgs.length>1?'首尾帧':'参考图')+(linkedRef.texts.length?'，并注入 '+linkedRef.texts.length+' 段剧本文字':'')):(linkedRef.texts.length?('✅ 已注入 '+linkedRef.texts.length+' 段连线剧本文字（无画面参考）'):'⚠ 未带上任何连线参考，原因见下方原始返回'));
+    showRaw('【连线参考诊断】\n'+d+'\n\n实际请求体字段：mode='+videoMode+(refImageB64?('，image='+String(JSON.stringify(refImageB64).slice(0,60))+'…'):'，无画面参考')+(fullPrompt.length!==prompt.length?('，提示词含注入文字(共'+fullPrompt.length+'字符)'):'，提示词未注入'));
   }
   const RETRY_WAIT=20000;
   const pollBase=API_BASE.replace('/v1','');
@@ -1280,6 +1378,8 @@ function buildMenuItems(target){
       items.push({label:'取消连线起点',icon:'⭕',action:()=>{connectPendingNode=null;draw();toast('已取消连线起点');}});
     }
     items.push({label:'断开该节点所有连线',icon:'✂️',action:()=>disconnectNode(n)});
+    items.push({sep:true});
+    items.push({label:'导出这张卡片内容',icon:'📤',hint:'txt/图/视频/原文件',action:()=>exportNodeContent(n)});
     items.push({sep:true});
     items.push({label:'置于顶层',icon:'⬆️',action:bringToFront});
     items.push({label:'置于底层',icon:'⬇️',action:sendToBack});
