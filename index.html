@@ -60,6 +60,7 @@ body{overflow:hidden;background:#0a0b10;color:#fff;height:100vh;height:100dvh;ov
 .wait-cancel{background:#2d3348;color:#ffd7d7;border:1px solid #4a3550;padding:7px 18px;border-radius:6px;cursor:pointer;font-size:13px}
 .wait-cancel:hover{background:#dc2626;color:#fff}
 .wait-warn{font-size:12px;color:#fbbf24;margin:2px 0 14px}
+.wait-raw{display:none;max-height:130px;overflow:auto;font-size:11px;color:#9fe3c0;background:#0a0b10;border:1px solid #2d3348;border-radius:6px;padding:6px 8px;margin:0 0 12px;text-align:left;white-space:pre-wrap;word-break:break-all}
 @media (max-width:640px),(pointer:coarse){
   .modal-content{width:calc(100vw - 20px);max-height:calc(100dvh - 40px);overflow-y:auto}
   .edit-modal{left:10px!important}
@@ -187,6 +188,7 @@ body{overflow:hidden;background:#0a0b10;color:#fff;height:100vh;height:100dvh;ov
     <div class="wait-title">视频生成排队中</div>
     <div class="wait-msg" id="waitMsg">正在提交任务…</div>
     <div class="wait-sub" id="waitSub">已等待 00:00</div>
+    <pre class="wait-raw" id="waitRaw"></pre>
     <div class="wait-warn">⚠ 生成期间请不要关闭或刷新页面</div>
     <button class="wait-cancel" onclick="cancelWait()">取消任务</button>
   </div>
@@ -966,13 +968,14 @@ async function runAI(){
       });
       const data=await res.json();
       if(!waitCtl||waitCtl.cancelled){refImageBlob=null;return;}
-      if(!res.ok||!(data.data&&data.data[0]&&data.data[0].url)){
+      const url=extractResult(data,'image');
+      if(!url){
         endWait();
-        alert('图片生成失败：'+JSON.stringify(data).slice(0,300));
+        showRaw(JSON.stringify(data).slice(0,2000));
+        alert('图片生成失败（HTTP '+(res?res.status:'?')+'），接口原始返回：\n'+JSON.stringify(data).slice(0,500));
         refImageBlob=null;
         return;
       }
-      const url=data.data[0].url;
       const c=getViewCenterPos();
       const ar=ratio==='9:16'?0.5625:(ratio==='1:1'?1:1.7778);
       const tgt=pendingTarget&&nodes.includes(pendingTarget)?pendingTarget:null;
@@ -1063,12 +1066,20 @@ async function runAI(){
       data=await res.json();
     }catch(e){nerr=e;}
     if(!waitCtl||waitCtl.cancelled)return;
-    if(res&&res.ok&&data&&data.video_id){poll(data.video_id);return;}
+    if(res&&res.ok){
+      const vid=data&&(data.video_id||data.id||data.task_id||(data.data&&(data.data.video_id||data.data.id||data.data.task_id)));
+      if(vid){poll(vid);return;}
+      showRaw(JSON.stringify(data||{}).slice(0,2000));
+      endWait();
+      alert('提交成功但没拿到任务号，接口原始返回：\n'+JSON.stringify(data||{}).slice(0,700));
+      return;
+    }
     waitCtl.tries++;
     waitSubTick();
+    showRaw(JSON.stringify(data||{}).slice(0,2000));
     if(nerr){waitMsg('网络异常，持续重试中…');}
     else if(data&&data.code==='video_queue_full'){waitMsg('使用的人太多，队列已满，排队重试中…');}
-    else{waitMsg('暂未提交成功：'+JSON.stringify(data||{}).slice(0,90)+'，持续重试…');}
+    else{waitMsg('暂未提交成功（HTTP '+(res?res.status:'?')+'）：'+JSON.stringify(data||{}).slice(0,90)+'，持续重试…');}
     later(submitTask,RETRY_WAIT);
   }
   async function poll(vid){
@@ -1083,28 +1094,39 @@ async function runAI(){
     if(!waitCtl||waitCtl.cancelled)return;
     if(nerr||(pr&&!pr.ok)){
       waitCtl.tries++;
-      waitMsg('查询进度异常，继续等待…');
+      showRaw(pr?('HTTP '+pr.status+'\n'+JSON.stringify(pd||{})):(nerr&&nerr.message)||'未知网络错误');
+      waitMsg('查询进度异常（'+(pr?'HTTP '+pr.status:'网络错误')+'），继续等待…');
       later(()=>poll(vid),3000);
       return;
     }
-    if(pd.status==="completed"){
+    const st=String(pd.status||pd.state||pd.task_status||'').toLowerCase();
+    const done=(st==='completed'||st==='success'||st==='succeeded'||st==='finished'||st==='done'||st.includes('complete')||st.includes('success'));
+    const bad=(st==='failed'||st==='error'||st.includes('fail')||st.includes('cancel'));
+    if(done){
+      showRaw(JSON.stringify(pd).slice(0,2000));
+      const url=extractResult(pd,'video');
+      if(!url){
+        endWait();
+        alert('任务显示完成，但返回里没有视频地址。完整原始返回已显示在遮罩上，截图发我即可排查：\n'+JSON.stringify(pd).slice(0,500));
+        return;
+      }
       const c=getViewCenterPos();
       const tgt=pendingTarget&&nodes.includes(pendingTarget)?pendingTarget:null;
       pendingTarget=null;
       const n=tgt||{
         x:c.x-90,y:c.y-70,w:180,h:140,
         title:"AI生成视频",type:"video",isVideo:true,
-        _objectUrl:null,videoEl:null,videoSnap:null,videoPlaying:false,src:pd.url
+        _objectUrl:null,videoEl:null,videoSnap:null,videoPlaying:false,src:url
       };
       if(tgt){
         destroyVideo(tgt);
         tgt.type='video';tgt.isVideo=true;
-        tgt.text='';tgt.src=pd.url;tgt.videoSnap=null;tgt._fitted=false;
+        tgt.text='';tgt.src=url;tgt.videoSnap=null;tgt._fitted=false;
         if(!tgt.title)tgt.title='AI生成视频';
       }
-      n._objectUrl=pd.url;
+      n._objectUrl=url;
       const v=document.createElement('video');
-      v.src=pd.url;
+      v.src=url;
       attachVideo(n,v);
       if(!tgt)nodes.push(n);
       setSelection([n]);
@@ -1112,12 +1134,13 @@ async function runAI(){
       draw();
       endWait();
       toast(tgt?'✅ 视频生成完成，已写回该卡片':'✅ 视频生成完成，已加入画布');
-    }else if(pd.status==="failed"){
+    }else if(bad){
       waitCtl.tries++;
-      waitMsg('本轮生成失败：'+((pd.error&&pd.error.message)||'未知错误')+'，重新排队…');
+      showRaw(JSON.stringify(pd).slice(0,2000));
+      waitMsg('本轮生成失败：'+((pd.error&&pd.error.message)||JSON.stringify(pd).slice(0,100))+'，重新排队…');
       later(submitTask,RETRY_WAIT);
     }else{
-      waitMsg('排队/生成中，请耐心等待…');
+      waitMsg('排队/生成中…（状态：'+(pd.status||pd.state||'?')+'）');
       later(()=>poll(vid),1500);
     }
   }
@@ -1138,6 +1161,7 @@ function beginWait(title){
   const mask=document.getElementById('waitMask');
   mask.querySelector('.wait-title').innerText=title;
   mask.querySelector('.wait-msg').innerText='正在提交任务…';
+  document.getElementById('waitRaw').style.display='none';
   mask.classList.add('show');
   ctl.timer=setInterval(()=>{
     document.getElementById('waitSub').innerText='已等待 '+fmtMs(Date.now()-ctl.t0)+' · 重试 '+ctl.tries+' 次';
@@ -1156,6 +1180,41 @@ function endWait(){
   if(waitCtl&&waitCtl.timer)clearInterval(waitCtl.timer);
   waitCtl=null;
   document.getElementById('waitMask').classList.remove('show');
+}
+// 把接口原始返回显示在遮罩上，任何结构都能看到
+function showRaw(txt){
+  const el=document.getElementById('waitRaw');
+  if(!el)return;
+  el.innerText='接口原始返回：\n'+txt;
+  el.style.display='block';
+}
+// 宽容提取：不管返回字段叫什么，递归找出视频/图片地址（URL 或 base64）
+function extractResult(obj,kind){
+  const urls=[],b64s=[];
+  (function walk(o,p){
+    if(o==null)return;
+    if(typeof o==='string'){
+      if(/^https?:\/\//i.test(o))urls.push({p:p,u:o});
+      else if(/(b64|base64)/i.test(p)&&o.length>64)b64s.push({p:p,v:o});
+      return;
+    }
+    if(typeof o==='object'){for(const k of Object.keys(o))walk(o[k],p+'/'+k);}
+  })(obj,'');
+  if(kind==='video'){
+    const m=urls.find(x=>/\.(mp4|mov|webm|m3u8)/i.test(x.u)||/video/i.test(x.p));
+    if(m)return m.u;
+    return null;
+  }
+  const m=urls.find(x=>/\.(png|jpe?g|webp|gif|bmp)/i.test(x.u))||urls.find(x=>/url/i.test(x.p));
+  if(m)return m.u;
+  const b=b64s[0];
+  if(b){
+    let v=b.v;
+    if(v.startsWith('data:'))return v;
+    if(v.startsWith('base64,'))return 'data:image/png;'+v;
+    return 'data:image/png;base64,'+v;
+  }
+  return null;
 }
 // 有任务在生成时，关闭或刷新页面会先弹浏览器确认框，防误关丢任务
 window.addEventListener('beforeunload',e=>{
@@ -1469,8 +1528,8 @@ function draw(){
         if(!n._fitted){fitNodeByAspect(n,im.naturalWidth,im.naturalHeight);n._fitted=true;}
         mediaEl=im;
       }
-    }else if(n.isVideo&&n.videoSnap){
-      mediaEl=n.videoSnap;
+    }else if(n.isVideo){
+      mediaEl=(n.videoEl&&n.videoEl.readyState>=2)?n.videoEl:n.videoSnap;
     }
     if(mediaEl){
       ctx.save();
