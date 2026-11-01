@@ -862,6 +862,49 @@ function openDocNode(n){
   a.click();
 }
 // 文本类判定：txt/md 等纯文本（用后缀兜底，部分浏览器 MIME 为空）
+// 从 docx(zip) 中解压指定条目
+async function unzipEntry(buf, entryName){
+  const dv=new DataView(buf);
+  const bytes=new Uint8Array(buf);
+  let cdOff=-1;
+  for(let i=buf.byteLength-22;i>=0;i--){
+    if(dv.getUint32(i,true)===0x06054b50){cdOff=dv.getUint32(i+16,true);break;}
+  }
+  if(cdOff<0)throw new Error('不是有效的 zip/docx 文件');
+  let p=cdOff;
+  while(p+46<=buf.byteLength&&dv.getUint32(p,true)===0x02014b50){
+    const method=dv.getUint16(p+10,true);
+    const compSize=dv.getUint32(p+20,true);
+    const fnLen=dv.getUint16(p+28,true);
+    const exLen=dv.getUint16(p+30,true);
+    const cmLen=dv.getUint16(p+32,true);
+    const lho=dv.getUint32(p+42,true);
+    const name=new TextDecoder().decode(bytes.slice(p+46,p+46+fnLen));
+    if(name===entryName){
+      const lFn=dv.getUint16(lho+26,true), lEx=dv.getUint16(lho+28,true);
+      const dataStart=lho+30+lFn+lEx;
+      const data=bytes.slice(dataStart,dataStart+compSize);
+      if(method===0)return data;
+      const ds=new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+      return new Uint8Array(await new Response(ds).arrayBuffer());
+    }
+    p+=46+fnLen+exLen+cmLen;
+  }
+  throw new Error('docx 里找不到 '+entryName);
+}
+// docx -> 纯文本（段落分行）
+async function docxToText(file){
+  const xml=new TextDecoder('utf-8').decode(await unzipEntry(await file.arrayBuffer(),'word/document.xml'));
+  const doc=new DOMParser().parseFromString(xml,'application/xml');
+  if(doc.getElementsByTagName('parsererror').length)throw new Error('document.xml 解析失败');
+  const out=[];
+  doc.getElementsByTagName('w:p').forEach(p=>{
+    let line='';
+    p.querySelectorAll('w:t').forEach(t=>{line+=t.textContent;});
+    out.push(line);
+  });
+  return out.join('\n').replace(/\n{3,}/g,'\n\n').trim();
+}
 function isTextLike(f){
   return f.type.startsWith('text/')||/\.(txt|md|markdown|csv|json|srt|lrc)$/i.test(f.name);
 }
@@ -881,6 +924,21 @@ function uploadAIRef(){
     }else if(f.type.startsWith('video/')){
       refVideoBlob=f;refImageBlob=null;refTextExtra=null;
       document.getElementById('aiRefTip').innerText='✅ 已加载参考视频：'+f.name;
+    }else if(/\.docx$/i.test(f.name)||f.type==='application/vnd.openxmlformats-officedocument.wordprocessingml.document'){
+      document.getElementById('aiRefTip').innerText='⏳ 正在把《'+f.name+'」转成文字…';
+      try{
+        const t=await docxToText(f);
+        if(!t)throw new Error('没读到正文');
+        refTextExtra=t.slice(0,200*1024);
+        refImageBlob=null;refVideoBlob=null;
+        document.getElementById('aiRefTip').innerText='📝 已自动转写《'+f.name+'」：共 '+t.length+' 字，生图/生视频将作为【参考剧本/资料】注入提示词'+(t.length>200*1024?'（超长已截断）':'');
+      }catch(err){
+        document.getElementById('aiRefTip').innerText='❌ Word 转文字失败：'+err.message+'（可用 Word 另存为 .txt 再上传）';
+      }
+    }else if(/\.pdf$/i.test(f.name)||f.type==='application/pdf'){
+      document.getElementById('aiRefTip').innerText='📕 PDF 无法在浏览器内直接转文字：请用 Word 打开另存为 .docx 或 .txt 再上传；或点 🖼 存进画布留档';
+    }else if(/\.doc$/i.test(f.name)){
+      document.getElementById('aiRefTip').innerText='📕 老版 .doc 无法解析：请用 Word 另存为 .docx 或 .txt 再上传';
     }else if(isTextLike(f)){
       if(f.size>200*1024){
         document.getElementById('aiRefTip').innerText='⚠ 文本文件超过 200KB，只取前 200KB';
@@ -943,6 +1001,29 @@ function aiTypeChange(){
 }
 
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+// 从视频 blob 取首帧 dataURL，作为图片生成的画面参考
+function videoFirstFrame(blob){
+  return new Promise(res=>{
+    try{
+      const url=URL.createObjectURL(blob);
+      const v=document.createElement('video');
+      v.muted=true;v.preload='auto';
+      let done=false;
+      const fin=(out)=>{if(done)return;done=true;URL.revokeObjectURL(url);res(out);};
+      v.addEventListener('loadeddata',()=>{
+        try{
+          const c=document.createElement('canvas');
+          c.width=v.videoWidth||512;c.height=v.videoHeight||512;
+          c.getContext('2d').drawImage(v,0,0,c.width,c.height);
+          fin(c.toDataURL('image/jpeg',0.85));
+        }catch(e){fin(null);}
+      });
+      v.addEventListener('error',()=>fin(null));
+      setTimeout(()=>fin(null),6000);
+      v.src=url;
+    }catch(e){res(null);}
+  });
+}
 // 依据锚点卡片重建可勾选的连线参考清单
 function buildLinkRefList(anchor){
   const pool=linkedNodesOf(anchor);
@@ -1100,12 +1181,27 @@ async function runAI(){
     if(ratio==='9:16')size=longSide/2+'x'+longSide;
     else if(ratio==='1:1')size=longSide+'x'+longSide;
     else size=longSide+'x'+(longSide/2);
-    const fullPrompt=prompt+(refTextExtra?('\n\n【参考剧本/资料】\n'+refTextExtra):'');
+    let fullPrompt=prompt+(refTextExtra?('\n\n【参考剧本/资料】\n'+refTextExtra):'');
+    let refImg=null, linkedRef=null, refSrc='';
+    if(refImageBlob){
+      refImg=await blobToBase64(refImageBlob);refSrc='上传的参考图';
+    }else if(refVideoBlob){
+      refImg=await videoFirstFrame(refVideoBlob);refSrc='上传视频的首帧';
+      if(!refImg)toast('视频首帧读取失败，本次不带画面参考');
+    }else{
+      if(!linkRefPool.length)buildLinkRefList(pendingTarget||lastSelected||null);
+      linkedRef=await collectLinkedRefs();
+      if(linkedRef.imgs.length){refImg=linkedRef.imgs[0];refSrc='连线清单勾选的画面';}
+      if(linkedRef.texts.length)fullPrompt+='\n\n【画布连线节点的剧本/设定】\n'+linkedRef.texts.join('\n---\n');
+    }
     const payload={model:'agnes-image-2.5-flash',prompt:fullPrompt,size:size};
     if(!isNaN(seed)&&seed>=0)payload.seed=seed;
-    if(refImageBlob)payload.image=await blobToBase64(refImageBlob);
+    if(refImg)payload.image=refImg;
     const ctl=beginWait('图片生成中');
     if(!ctl){toast('已有任务在生成中，请等它完成或先取消');return;}
+    if(refImg)waitMsg('✅ 已带上画面参考（图生图模式）：来自'+refSrc);
+    else waitMsg('⚠ 本次无画面参考，为纯文字生图（可上传附件或在连线清单勾选画面）');
+    if(linkedRef)showRaw('【连线参考诊断】\n'+linkedRef.diag.join('\n')+'\n\n请求体实际字段：'+(payload.image?'image=已附带参考画面':'image=无')+'，提示词共 '+fullPrompt.length+' 字符');
     closeAIModal();
     try{
       const res=await fetch(API_BASE+'/images/generations',{
