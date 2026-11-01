@@ -1438,10 +1438,15 @@ function drawCover(el,n){
 }
 // 创建视频元素并挂上元数据回调，让卡片跟随视频真实宽高比
 function attachVideo(n,v){
-  v.muted=true;v.preload='metadata';
+  v.muted=true;v.preload='auto';
   v.addEventListener('loadedmetadata',()=>{
     if(v.videoWidth)fitNodeByAspect(n,v.videoWidth,v.videoHeight);
+    // 预加载停在元数据时 readyState 到不了 2，借一次极短播放强制解码首帧再暂停
+    try{const pr=v.play();if(pr&&pr.catch)pr.catch(()=>{});}catch(e){}
+    setTimeout(()=>{try{v.pause();}catch(e){}},150);
   });
+  v.addEventListener('loadeddata',()=>{captureVideoSnap(n);});
+  v.addEventListener('seeked',()=>{captureVideoSnap(n);});
   n.videoEl=v;
 }
 // 端口命中：世界坐标下找半径内最近的圆点
