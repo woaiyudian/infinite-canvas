@@ -104,7 +104,15 @@ body{overflow:hidden;background:#0a0b10;color:#fff;height:100vh;height:100dvh;ov
 </div>
 <div class="modal" id="aiModal">
   <div class="modal-content">
-    <h3>AI生成分镜</h3>
+    <h3 id="aiModalTitle">AI生成分镜</h3>
+    <div class="form-row" id="cardTitleRow" style="display:none">
+      <label>卡片改名</label>
+      <input id="aiCardTitle" placeholder="这张卡片的标题">
+    </div>
+    <div class="form-row" id="cardTextRow" style="display:none">
+      <label>文本内容</label>
+      <textarea id="aiCardText" placeholder="卡片上的文字"></textarea>
+    </div>
     <div class="form-row">
       <label>类型</label>
       <select id="aiType" onchange="aiTypeChange()">
@@ -123,8 +131,11 @@ body{overflow:hidden;background:#0a0b10;color:#fff;height:100vh;height:100dvh;ov
     </div>
     <div id="aiRefTip" style="font-size:12px;color:#94a3b8;margin:4px 0 8px 80px"></div>
     <div class="form-row">
-      <label>画布参考</label>
-      <select id="aiRefNode"><option value="">不选画布节点</option></select>
+      <label>连线参考</label>
+      <select id="aiRefNode">
+        <option value="auto">自动带上相连节点</option>
+        <option value="off">不使用连线参考</option>
+      </select>
     </div>
     <div class="form-row" id="ratioRow">
       <label>画面比例</label>
@@ -212,6 +223,8 @@ const API_KEY='sk-pVsYipjj0gZgzf9xionpcneAekuTyWEpr5G7RAwbBOcRrhr1';
 let refImageBlob=null;
 let refVideoBlob=null;
 let refTextExtra=null;
+let aiTargetNode=null;
+let pendingTarget=null;
 
 function world(x,y){return {x:(x-camX)/zoom,y:(y-camY)/zoom}}
 function screen(x,y){return {x:x*zoom+camX,y:y*zoom+camY}}
@@ -799,21 +812,38 @@ function uploadAIRef(){
   }
   i.click();
 }
-function openAIModal(){
+function openAIModal(node){
   document.getElementById('aiModal').style.display='flex';
   refImageBlob=null;refVideoBlob=null;refTextExtra=null;
   document.getElementById('aiRefTip').innerText='';
   const sel=document.getElementById('aiRefNode');
-  sel.innerHTML='<option value="">不选画布节点</option>';
-  nodes.forEach((n,i)=>{
-    const o=document.createElement('option');
-    o.value=String(i);
-    o.textContent=n.title||('节点'+(i+1));
-    sel.appendChild(o);
-  });
+  if(sel)sel.value='auto';
+  aiTargetNode=node||null;
+  const titleRow=document.getElementById('cardTitleRow');
+  const textRow=document.getElementById('cardTextRow');
+  const h3=document.getElementById('aiModalTitle');
+  if(aiTargetNode){
+    // 双击卡片：改名 + AI 生成融合，结果就地写回这张卡
+    h3.innerText='卡片改名 + AI生成';
+    titleRow.style.display='flex';
+    document.getElementById('aiCardTitle').value=aiTargetNode.title||'';
+    const isEditText=aiTargetNode.type==='text'&&!aiTargetNode._fileId;
+    textRow.style.display=isEditText?'flex':'none';
+    if(isEditText)document.getElementById('aiCardText').value=aiTargetNode.text||'';
+    const tt=document.getElementById('aiType');
+    tt.value=aiTargetNode.isVideo?'video':(aiTargetNode.type==='img'?'image':'text');
+    toast('生成结果会写回这张卡片');
+  }else{
+    h3.innerText='AI生成分镜';
+    titleRow.style.display='none';
+    textRow.style.display='none';
+  }
   aiTypeChange();
 }
-function closeAIModal(){document.getElementById('aiModal').style.display='none'}
+function closeAIModal(){
+  document.getElementById('aiModal').style.display='none';
+  aiTargetNode=null;
+}
 function aiTypeChange(){
   const el=document.getElementById('aiType');
   const t=el?el.value:'video';
@@ -827,12 +857,77 @@ function aiTypeChange(){
   }
 }
 
+// 收集连线参考：优先以当前选中节点为锚，否则取所有参与连线的节点
+function linkedNodesOf(anchor){
+  const out=[];
+  if(anchor){
+    edges.forEach(e=>{
+      if(!e.a||!e.b)return;
+      if(e.a===anchor)out.push(e.b);
+      else if(e.b===anchor)out.push(e.a);
+    });
+    return out;
+  }
+  const seen=new Set();
+  edges.forEach(e=>{
+    if(!e.a||!e.b)return;
+    [e.a,e.b].forEach(n=>{if(!seen.has(n)){seen.add(n);out.push(n);}});
+  });
+  return out;
+}
+async function collectLinkedRefs(){
+  const anchor=lastSelected||null;
+  const pool=linkedNodesOf(anchor);
+  const imgs=[], texts=[];
+  for(const n of pool){
+    if(n.isVideo||n.type==='video'){
+      // 已播放过的视频用当前画面快照作参考
+      if(n.videoSnap){
+        try{imgs.push(n.videoSnap.toDataURL('image/jpeg',0.85));}catch(e){}
+      }
+      continue;
+    }
+    if(n.src&&String(n.type).indexOf('img')>=0){
+      if(/^https?:/i.test(n.src)){imgs.push(n.src);}
+      else if(n.src.startsWith('blob:')){
+        try{
+          const b=await(await fetch(n.src)).blob();
+          if(b.size<=8*1024*1024)imgs.push(await blobToBase64(b));
+        }catch(e){}
+      }
+    }
+    if(n.type==='text'&&n.text)texts.push(String(n.text).slice(0,2000));
+  }
+  return {imgs:imgs.slice(0,2),texts:texts.slice(0,3),count:pool.length};
+}
+
 async function runAI(){
   const typeEl=document.getElementById('aiType');
   const t=typeEl?typeEl.value:'video';
   const prompt=document.getElementById('aiPrompt').value.trim();
   if(!prompt)return alert('请填写提示词');
+  pendingTarget=aiTargetNode||null;
+  if(aiTargetNode){
+    const nt=document.getElementById('aiCardTitle').value.trim();
+    if(nt)aiTargetNode.title=nt;
+    const tr=document.getElementById('cardTextRow');
+    if(tr.style.display!=='none'){
+      aiTargetNode.text=document.getElementById('aiCardText').value;
+    }
+    draw();
+  }
   if(t==="text"){
+    if(aiTargetNode){
+      aiTargetNode.type='text';
+      aiTargetNode.isVideo=false;
+      aiTargetNode.text=prompt;
+      if(!aiTargetNode.title)aiTargetNode.title='分镜文本';
+      saveProjects();
+      draw();
+      closeAIModal();
+      toast('✅ 文本已写入该卡片');
+      return;
+    }
     const center=getViewCenterPos();
     const nText={
       x:center.x-110,y:center.y-70,w:220,h:140,
@@ -880,16 +975,27 @@ async function runAI(){
       const url=data.data[0].url;
       const c=getViewCenterPos();
       const ar=ratio==='9:16'?0.5625:(ratio==='1:1'?1:1.7778);
-      const n={
-        x:c.x-90,y:c.y-70,w:180,h:Math.round(180/ar),
-        title:'AI生成图片',type:'img',isVideo:false,src:url
-      };
-      nodes.push(n);
-      setSelection([n]);
+      const tgt=pendingTarget&&nodes.includes(pendingTarget)?pendingTarget:null;
+      pendingTarget=null;
+      if(tgt){
+        destroyVideo(tgt);
+        tgt.type='img';tgt.isVideo=false;
+        tgt.text='';tgt.src=url;tgt.videoSnap=null;
+        tgt._fitted=false;
+        if(!tgt.title)tgt.title='AI生成图片';
+        setSelection([tgt]);
+      }else{
+        const n={
+          x:c.x-90,y:c.y-70,w:180,h:Math.round(180/ar),
+          title:'AI生成图片',type:'img',isVideo:false,src:url
+        };
+        nodes.push(n);
+        setSelection([n]);
+      }
       saveProjects();
       draw();
       endWait();
-      toast('✅ 图片已生成，加入画布');
+      toast(tgt?'✅ 图片已生成，写回该卡片':'✅ 图片已生成，加入画布');
     }catch(e){
       if(waitCtl)endWait();
       alert('网络请求失败：'+e.message+'\n请检查网络后重试');
@@ -902,14 +1008,25 @@ async function runAI(){
   let videoMode="text";
   let refImageB64=null;
   let refVideoB64=null;
+  let linkedRef=null;
   if(refVideoBlob){
     videoMode="reference";
     refVideoB64=await blobToBase64(refVideoBlob);
   }else if(refImageBlob){
     videoMode="keyframe";
     refImageB64=await blobToBase64(refImageBlob);
+  }else{
+    const refSel=document.getElementById('aiRefNode');
+    if(!refSel||refSel.value!=='off'){
+      linkedRef=await collectLinkedRefs();
+      if(linkedRef.imgs.length===1){videoMode="keyframe";refImageB64=linkedRef.imgs[0];}
+      else if(linkedRef.imgs.length>=2){videoMode="keyframe";refImageB64=linkedRef.imgs;}
+    }
   }
-  const fullPrompt=prompt+(refTextExtra?('\n\n【参考剧本/资料】\n'+refTextExtra):'');
+  let fullPrompt=prompt+(refTextExtra?('\n\n【参考剧本/资料】\n'+refTextExtra):'');
+  if(linkedRef&&linkedRef.texts.length){
+    fullPrompt+='\n\n【画布连线节点的剧本/设定】\n'+linkedRef.texts.join('\n---\n');
+  }
   const payload={
     model:"agnes-video-2.5-flash",
     prompt:fullPrompt,
@@ -922,6 +1039,9 @@ async function runAI(){
   if(videoMode==="reference")payload.video=refVideoB64;
   const ctl=beginWait('视频生成排队中');
   if(!ctl){toast('已有任务在排队，请等它完成或先取消');return;}
+  if(linkedRef&&linkedRef.imgs.length){
+    waitMsg('已自动带入 '+linkedRef.imgs.length+' 个连线画面作为'+(linkedRef.imgs.length>1?'首尾帧':'参考图'));
+  }
   const RETRY_WAIT=20000;
   const pollBase=API_BASE.replace('/v1','');
   // 参考素材已转成 base64 写进 payload，原引用可释放
@@ -969,19 +1089,29 @@ async function runAI(){
     }
     if(pd.status==="completed"){
       const c=getViewCenterPos();
-      const n={
+      const tgt=pendingTarget&&nodes.includes(pendingTarget)?pendingTarget:null;
+      pendingTarget=null;
+      const n=tgt||{
         x:c.x-90,y:c.y-70,w:180,h:140,
         title:"AI生成视频",type:"video",isVideo:true,
-        _objectUrl:pd.url,videoEl:null,videoSnap:null,videoPlaying:false,src:pd.url
+        _objectUrl:null,videoEl:null,videoSnap:null,videoPlaying:false,src:pd.url
       };
+      if(tgt){
+        destroyVideo(tgt);
+        tgt.type='video';tgt.isVideo=true;
+        tgt.text='';tgt.src=pd.url;tgt.videoSnap=null;tgt._fitted=false;
+        if(!tgt.title)tgt.title='AI生成视频';
+      }
+      n._objectUrl=pd.url;
       const v=document.createElement('video');
       v.src=pd.url;
       attachVideo(n,v);
-      nodes.push(n);setSelection([n]);
+      if(!tgt)nodes.push(n);
+      setSelection([n]);
       saveProjects();
       draw();
       endWait();
-      toast('✅ 视频生成完成，已加入画布');
+      toast(tgt?'✅ 视频生成完成，已写回该卡片':'✅ 视频生成完成，已加入画布');
     }else if(pd.status==="failed"){
       waitCtl.tries++;
       waitMsg('本轮生成失败：'+((pd.error&&pd.error.message)||'未知错误')+'，重新排队…');
@@ -1038,6 +1168,7 @@ function cancelWait(){
   if(!waitCtl)return;
   waitCtl.cancelled=true;
   endWait();
+  pendingTarget=null;
   refImageBlob=null;refVideoBlob=null;refTextExtra=null;
   toast('已取消排队任务');
 }
@@ -1214,7 +1345,7 @@ function drawEdge(a,b,o){
   const c=edgeCurve(a,b);
   ctx.save();
   ctx.globalAlpha=o.alpha==null?1:o.alpha;
-  ctx.strokeStyle=o.color||'#7c3aed';
+  ctx.strokeStyle=o.color||'#ffffff';
   ctx.lineWidth=(o.width||2)/zoom;
   ctx.lineCap='round';
   ctx.setLineDash([7/zoom,6/zoom]);
@@ -1320,7 +1451,7 @@ function draw(){
     if(!e.a||!e.b)return;
     const ap=edgeAnchors(e);
     if(e===selectedEdge)drawEdge(ap.a,ap.b,{flow:-edgeFlow,color:'#f87171',width:3.5});
-    else drawEdge(ap.a,ap.b,{flow:-edgeFlow});
+    else drawEdge(ap.a,ap.b,{flow:-edgeFlow,color:'#ffffff'});
   })
   nodes.forEach(n=>{
     ctx.fillStyle='#1c2030';
@@ -1656,7 +1787,7 @@ cv.addEventListener('dblclick',e=>{
   if(hit){
     if(hit.type==='audio'){playAudioNode(hit);return;}
     if(hit.type==='doc'){openDocNode(hit);return;}
-    openEditModal(hit);return;
+    openAIModal(hit);return;
   }
   addNodeAt(m);
 });
