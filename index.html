@@ -59,6 +59,7 @@ body{overflow:hidden;background:#0a0b10;color:#fff;height:100vh;height:100dvh;ov
 .wait-sub{font-size:12px;color:#8892ab;margin:8px 0 16px}
 .wait-cancel{background:#2d3348;color:#ffd7d7;border:1px solid #4a3550;padding:7px 18px;border-radius:6px;cursor:pointer;font-size:13px}
 .wait-cancel:hover{background:#dc2626;color:#fff}
+.wait-warn{font-size:12px;color:#fbbf24;margin:2px 0 14px}
 @media (max-width:640px),(pointer:coarse){
   .modal-content{width:calc(100vw - 20px);max-height:calc(100dvh - 40px);overflow-y:auto}
   .edit-modal{left:10px!important}
@@ -175,6 +176,7 @@ body{overflow:hidden;background:#0a0b10;color:#fff;height:100vh;height:100dvh;ov
     <div class="wait-title">视频生成排队中</div>
     <div class="wait-msg" id="waitMsg">正在提交任务…</div>
     <div class="wait-sub" id="waitSub">已等待 00:00</div>
+    <div class="wait-warn">⚠ 生成期间请不要关闭或刷新页面</div>
     <button class="wait-cancel" onclick="cancelWait()">取消任务</button>
   </div>
 </div>
@@ -698,7 +700,8 @@ async function runAI(){
     const payload={model:'agnes-image-2.5-flash',prompt:prompt,size:size};
     if(!isNaN(seed)&&seed>=0)payload.seed=seed;
     if(refImageBlob)payload.image=await blobToBase64(refImageBlob);
-    toast('图片生成中…');
+    const ctl=beginWait('图片生成中');
+    if(!ctl){toast('已有任务在生成中，请等它完成或先取消');return;}
     closeAIModal();
     try{
       const res=await fetch(API_BASE+'/images/generations',{
@@ -707,7 +710,9 @@ async function runAI(){
         body:JSON.stringify(payload)
       });
       const data=await res.json();
+      if(!waitCtl||waitCtl.cancelled){refImageBlob=null;return;}
       if(!res.ok||!(data.data&&data.data[0]&&data.data[0].url)){
+        endWait();
         alert('图片生成失败：'+JSON.stringify(data).slice(0,300));
         refImageBlob=null;
         return;
@@ -723,9 +728,11 @@ async function runAI(){
       setSelection([n]);
       saveProjects();
       draw();
+      endWait();
       toast('✅ 图片已生成，加入画布');
     }catch(e){
-      alert('请求失败：'+e.message+'（请确认 Agnes 网关已启动）');
+      if(waitCtl)endWait();
+      alert('网络请求失败：'+e.message+'\n请检查网络后重试');
     }
     refImageBlob=null;
     return;
@@ -859,6 +866,13 @@ function endWait(){
   waitCtl=null;
   document.getElementById('waitMask').classList.remove('show');
 }
+// 有任务在生成时，关闭或刷新页面会先弹浏览器确认框，防误关丢任务
+window.addEventListener('beforeunload',e=>{
+  if(waitCtl&&!waitCtl.cancelled){
+    e.preventDefault();
+    e.returnValue='还有任务正在生成，确定要离开吗？';
+  }
+});
 function cancelWait(){
   if(!waitCtl)return;
   waitCtl.cancelled=true;
