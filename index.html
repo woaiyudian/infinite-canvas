@@ -1144,6 +1144,7 @@ async function runAI(){
     showRaw('【连线参考诊断】\n'+d+'\n\n实际请求体字段：mode='+videoMode+(refImageB64?('，image='+String(JSON.stringify(refImageB64).slice(0,60))+'…'):'，无画面参考')+(fullPrompt.length!==prompt.length?('，提示词含注入文字(共'+fullPrompt.length+'字符)'):'，提示词未注入'));
   }
   const RETRY_WAIT=20000;
+  let pollDelay=5000; // 查询节奏：正常5秒，被限流(429)指数退避到最长30秒
   const pollBase=API_BASE.replace('/v1','');
   // 参考素材已转成 base64 写进 payload，原引用可释放
   refImageBlob=null;refVideoBlob=null;refTextExtra=null;
@@ -1190,13 +1191,15 @@ async function runAI(){
       pd=await pr.json();
     }catch(e){nerr=e;}
     if(!waitCtl||waitCtl.cancelled)return;
-    if(nerr||(pr&&!pr.ok)){
-      waitCtl.tries++;
+    if(nerr||(pr&&!pr.ok)||(pd&&pd.error&&!pd.status&&!pd.state&&!pd.task_status)){
+      const is429=(pr&&pr.status===429)||(pd&&pd.error&&(/429|频繁|too many/i.test(pd.error.code+' '+pd.error.message||'')));
+      if(is429){pollDelay=Math.min(30000,pollDelay*2);}
       showRaw(pr?('HTTP '+pr.status+'\n'+JSON.stringify(pd||{})):(nerr&&nerr.message)||'未知网络错误');
-      waitMsg('查询进度异常（'+(pr?'HTTP '+pr.status:'网络错误')+'），继续等待…');
-      later(()=>poll(vid),3000);
+      waitMsg((is429?'查询被限流(429)，已放慢到 '+Math.round(pollDelay/1000)+' 秒一查（任务已在生成中，不会重复提交）':'查询进度异常（'+(pr?'HTTP '+pr.status:'网络错误')+'），继续等待…')+' 任务号：'+vid);
+      later(()=>poll(vid),pollDelay);
       return;
     }
+    if(pollDelay!==5000){pollDelay=5000;} // 查询恢复正常节奏
     const st=String(pd.status||pd.state||pd.task_status||'').toLowerCase();
     const done=(st==='completed'||st==='success'||st==='succeeded'||st==='finished'||st==='done'||st.includes('complete')||st.includes('success'));
     const bad=(st==='failed'||st==='error'||st.includes('fail')||st.includes('cancel'));
@@ -1238,8 +1241,8 @@ async function runAI(){
       waitMsg('本轮生成失败：'+((pd.error&&pd.error.message)||JSON.stringify(pd).slice(0,100))+'，重新排队…');
       later(submitTask,RETRY_WAIT);
     }else{
-      waitMsg('排队/生成中…（状态：'+(pd.status||pd.state||'?')+'）');
-      later(()=>poll(vid),1500);
+      waitMsg('排队/生成中…（状态：'+(pd.status||pd.state||'?')+'，每 '+Math.round(pollDelay/1000)+' 秒查询一次）');
+      later(()=>poll(vid),pollDelay);
     }
   }
   submitTask();
