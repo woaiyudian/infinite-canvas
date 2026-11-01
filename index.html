@@ -590,12 +590,31 @@ function exportPNG(){
   a.href=cv.toDataURL();
   a.click();
 }
-function exportJSON(){
+async function exportJSON(){
   saveProjects();
+  const data={nodes,edges:serializeEdges(),camX,camY,zoom};
+  // 本地上传的文件只存了引用号，必须把本体一起打包，换设备才不丢内容
+  const ids=[...new Set(nodes.filter(n=>n._fileId).map(n=>n._fileId))];
+  if(ids.length){
+    toast('正在打包 '+ids.length+' 个本地文件…');
+    data.files={};
+    let bytes=0,fail=0;
+    for(const id of ids){
+      try{
+        const blob=await fileDB.get(id);
+        if(!blob){fail++;continue;}
+        bytes+=blob.size;
+        data.files[id]=await blobToBase64(blob);
+      }catch(e){fail++;}
+    }
+    const mb=bytes/1048576;
+    if(fail)toast('有 '+fail+' 个文件已失效，未打包进去');
+    if(mb>30)toast('⚠ 文件体积 '+mb.toFixed(1)+'MB，JSON 会很大，传输/导入都会慢');
+    else toast('已打包 '+ids.length+' 个文件（'+mb.toFixed(1)+'MB）');
+  }
   const a=document.createElement('a');
   a.download='pavo-project.json';
-  const data={nodes,edges:serializeEdges(),camX,camY,zoom};
-  const b=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+  const b=new Blob([JSON.stringify(data)],{type:'application/json'});
   a.href=URL.createObjectURL(b);
   a.click();
 }
@@ -611,9 +630,19 @@ function importJSON(){
     camX=d.camX||0;camY=d.camY||0;zoom=d.zoom||1;
     connectPendingNode=null;
     setSelection([]);
+    toast('正在恢复文件内容…');
+    // 把随项目打包进来的文件本体解码并写进本机 IndexedDB，之后按引用号取用
+    await Promise.all(nodes.map(async n=>{
+      n.videoEl=null;n.videoSnap=null;n.audioEl=null;
+      if(!n._fileId||!d.files||!d.files[n._fileId])return;
+      try{
+        const blob=await(await fetch(d.files[n._fileId])).blob();
+        await fileDB.put(n._fileId,blob);
+        n._restoredFrom=blob;
+      }catch(e){console.error('restore fail',e);}
+    }));
     nodes.forEach(n=>{
-      n.videoEl=null;n.videoSnap=null;
-      if(n.isVideo&&n.src){n._objectUrl=n.src;ensureVideoEl(n);}
+      if(n.isVideo&&n.src&&!n._fileId){n._objectUrl=n.src;ensureVideoEl(n);}
       if(n._fileId)rehydrateFile(n);
     })
     saveProjects();
@@ -713,7 +742,8 @@ async function attachLocalFile(n,f){
 // 会话重载后从库里找回文件并恢复 objectURL
 async function rehydrateFile(n){
   if(!n._fileId)return;
-  const blob=await fileDB.get(n._fileId);
+  const blob=n._restoredFrom||await fileDB.get(n._fileId);
+  delete n._restoredFrom;
   if(!blob)return;
   const url=URL.createObjectURL(blob);
   n.src=url;
