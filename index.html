@@ -134,11 +134,9 @@ body{overflow:hidden;background:#0a0b10;color:#fff;height:100vh;height:100dvh;ov
     <div id="aiRefTip" style="font-size:12px;color:#94a3b8;margin:4px 0 8px 80px"></div>
     <div class="form-row">
       <label>连线参考</label>
-      <select id="aiRefNode">
-        <option value="auto">自动带上相连节点</option>
-        <option value="off">不使用连线参考</option>
-      </select>
+      <button class="btn-secondary" onclick="rebuildLinkRefList()" style="flex:1;font-size:12px;padding:6px 10px">🔄 刷新连线清单</button>
     </div>
+    <div id="linkRefBox" style="margin:0 0 10px 80px;font-size:12px;max-height:170px;overflow-y:auto;background:#0a0b10;border:1px solid #2d3348;border-radius:8px;padding:6px 8px;line-height:1.5"></div>
     <div class="form-row" id="ratioRow">
       <label>画面比例</label>
       <select id="aiRatio">
@@ -226,6 +224,7 @@ const API_KEY='sk-pVsYipjj0gZgzf9xionpcneAekuTyWEpr5G7RAwbBOcRrhr1';
 let refImageBlob=null;
 let refVideoBlob=null;
 let refTextExtra=null;
+let linkRefPool=[];
 let aiTargetNode=null;
 let pendingTarget=null;
 
@@ -903,9 +902,8 @@ function openAIModal(node){
   document.getElementById('aiModal').style.display='flex';
   refImageBlob=null;refVideoBlob=null;refTextExtra=null;
   document.getElementById('aiRefTip').innerText='';
-  const sel=document.getElementById('aiRefNode');
-  if(sel)sel.value='auto';
   aiTargetNode=node||null;
+  buildLinkRefList(node||lastSelected||null);
   const titleRow=document.getElementById('cardTitleRow');
   const textRow=document.getElementById('cardTextRow');
   const h3=document.getElementById('aiModalTitle');
@@ -944,6 +942,55 @@ function aiTypeChange(){
   }
 }
 
+function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+// 依据锚点卡片重建可勾选的连线参考清单
+function buildLinkRefList(anchor){
+  const pool=linkedNodesOf(anchor);
+  linkRefPool=[];
+  const el=document.getElementById('linkRefBox');
+  if(!el)return;
+  if(!pool.length){
+    el.innerHTML='<div style="color:#6b7488;padding:2px">画布上还没有可参考的连线内容<br>用卡片两侧圆点连线后点"刷新连线清单"</div>';
+    return;
+  }
+  pool.forEach(n=>{
+    let kind='na',note='无可用内容';
+    if(n.isVideo||n.type==='video'){kind='video';note='画面快照';}
+    else if(n.type==='img'&&n.src){kind='img';note='参考画面';}
+    else if(n.type==='text'&&n.text){kind='text';note='注入提示词';}
+    else if(n.type==='audio'){kind='na';note='模型不支持音频';}
+    else if(n.type==='doc'||n._fileId){kind='na';note='模型不支持该文件';}
+    linkRefPool.push({n,kind,note,checked:(kind==='img'||kind==='video'||kind==='text')});
+  });
+  renderLinkRefList(anchor);
+}
+function renderLinkRefList(anchor){
+  const el=document.getElementById('linkRefBox');
+  const icons={img:'🖼',video:'🎬',text:'📃',na:'🚫'};
+  const head='<div style="color:#8892ab;padding-bottom:4px">锚点：'+(anchor?('「'+escHtml(anchor.title||'未命名卡')+'」的连线')+'':'<span style="color:#fbbf24">无选中卡片（当前为全部连线节点）</span>')+'</div>';
+  const rows=linkRefPool.map((it,i)=>
+    '<label style="display:flex;align-items:center;gap:6px;padding:3px 2px;cursor:'+(it.kind==='na'?'not-allowed':'pointer')+';color:'+(it.kind==='na'?'#6b7488':'#dfe4f0')+'">'+
+    '<input type="checkbox" '+(it.checked?'checked ':'')+'data-i="'+i+'" '+(it.kind==='na'?'disabled ':'')+'style="flex-shrink:0">'+
+    '<span style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+icons[it.kind]+' '+escHtml(it.n.title||it.n.type||'?')+'</span>'+
+    '<span style="color:#8892ab;flex-shrink:0">'+it.note+'</span></label>'
+  ).join('');
+  el.innerHTML=head+rows+'<div id="lrefCount" style="color:#94a3b8;padding-top:4px"></div>';
+  el.querySelectorAll('input[type=checkbox]').forEach(cb=>{
+    cb.onchange=()=>{linkRefPool[+cb.dataset.i].checked=cb.checked;updateLrefCount();};
+  });
+  updateLrefCount();
+}
+function updateLrefCount(){
+  const el=document.getElementById('lrefCount');
+  if(!el)return;
+  const imgs=linkRefPool.filter(x=>x.checked&&(x.kind==='img'||x.kind==='video')).length;
+  const texts=linkRefPool.filter(x=>x.checked&&x.kind==='text').length;
+  el.innerText='已勾选画面 '+imgs+' 张'+(imgs>2?'（接口上限 2 张，仅取前两张作首尾帧）':'')+' · 文字 '+texts+' 段';
+}
+function rebuildLinkRefList(){
+  buildLinkRefList(aiTargetNode||lastSelected||null);
+  toast('连线清单已刷新（共 '+linkRefPool.length+' 项）');
+}
 // 收集连线参考：优先以当前选中节点为锚，否则取所有参与连线的节点
 function linkedNodesOf(anchor){
   const out=[];
@@ -962,39 +1009,45 @@ function linkedNodesOf(anchor){
   });
   return out;
 }
-async function collectLinkedRefs(anchorHint){
-  const anchor=anchorHint||lastSelected||null;
-  const pool=linkedNodesOf(anchor);
+async function collectLinkedRefs(){
   const imgs=[], texts=[], diag=[];
-  diag.push('连线共 '+edges.length+' 条，锚点：'+(anchor?('「'+(anchor.title||'未命名卡')+'」(双击/选中卡)'):'无选中卡→收集全部连线节点'));
-  if(!edges.length)diag.push('画布还没有任何连线，无参考可带');
-  if(anchor&&pool.length===0)diag.push('锚点卡片没有任何连线，无参考可带');
-  for(const n of pool){
-    const tag=(n.title||n.type||'?');
-    if(n.isVideo||n.type==='video'){
-      if(n.videoSnap){
-        try{imgs.push(n.videoSnap.toDataURL('image/jpeg',0.85));diag.push('🎬 '+tag+'：画面快照已带上');}
-        catch(e){diag.push('🎬 '+tag+'：快照不可用(跨域限制被浏览器拒绝)');}
-      }else diag.push('🎬 '+tag+'：无画面快照，未带上');
+  if(!linkRefPool.length){
+    diag.push('连线清单为空：画布还没有连线，或连线卡片没有可用内容');
+    return {imgs,texts,diag};
+  }
+  for(const it of linkRefPool){
+    const tag=(it.n.title||it.n.type||'?');
+    if(!it.checked){diag.push('⏭ '+tag+'：已取消勾选，本次不带');continue;}
+    if(it.kind==='video'){
+      if(it.n.videoSnap){
+        try{imgs.push(it.n.videoSnap.toDataURL('image/jpeg',0.85));diag.push('🎬 '+tag+'：画面快照已带上');}
+        catch(e){diag.push('🎬 '+tag+'：快照跨域不可用，未带上');}
+      }else diag.push('🎬 '+tag+'：无画面快照（先双击播放一次再刷新清单），未带上');
       continue;
     }
-    if(n.type==='img'&&n.src){
+    if(it.kind==='img'){
+      const n=it.n;
       if(/^https?:/i.test(n.src)){imgs.push(n.src);diag.push('🖼 '+tag+'：云端图 URL 已带上');}
-      else if(n.src.startsWith('blob:')){
+      else if(n.src&&n.src.startsWith('blob:')){
         try{
           const b=await(await fetch(n.src)).blob();
           if(b.size<=8*1024*1024){imgs.push(await blobToBase64(b));diag.push('🖼 '+tag+'：本地图已转码带上');}
           else diag.push('🖼 '+tag+'：本地图超 8MB，未带上');
         }catch(e){diag.push('🖼 '+tag+'：本地图读取失败，未带上');}
       }else diag.push('🖼 '+tag+'：地址格式未知，未带上');
+      continue;
     }
-    if(n.type==='text'&&n.text){texts.push(String(n.text).slice(0,2000));diag.push('📃 '+tag+'：剧本文字已注入提示词');}
-    if(n.type==='audio'||n.type==='doc'||(n._fileId&&n.type!=='text'&&n.type!=='img'))diag.push((n.type==='audio'?'🎵':'📄')+' '+tag+'：模型不支持该类型，未带上');
+    if(it.kind==='text'){
+      texts.push(String(it.n.text).slice(0,2000));
+      diag.push('📃 '+tag+'：文字已注入提示词');
+      continue;
+    }
+    diag.push('🚫 '+tag+'：'+it.note+'，无法带上');
   }
   const kept=imgs.slice(0,2);
-  if(imgs.length>2)diag.push('图片参考超上限，只取前 2 张（首尾帧）');
-  diag.push('结果：图片参考 '+kept.length+' 张、文字参考 '+texts.length+' 段');
-  return {imgs:kept,texts:texts.slice(0,3),count:pool.length,diag:diag};
+  if(imgs.length>2)diag.push('勾选画面共 '+imgs.length+' 张，接口上限 2 张（首尾帧），已取前 2 张；请只勾选最关键的两张');
+  diag.push('结果：画面 '+kept.length+' 张、文字 '+texts.length+' 段（增减请回弹窗清单勾选）');
+  return {imgs:kept,texts:texts.slice(0,3),diag};
 }
 
 async function runAI(){
@@ -1113,14 +1166,10 @@ async function runAI(){
     videoMode="keyframe";
     refImageB64=await blobToBase64(refImageBlob);
   }else{
-    const refSel=document.getElementById('aiRefNode');
-    if(!refSel||refSel.value!=='off'){
-      linkedRef=await collectLinkedRefs(pendingTarget);
-      if(linkedRef.imgs.length===1){videoMode="keyframe";refImageB64=linkedRef.imgs[0];}
-      else if(linkedRef.imgs.length>=2){videoMode="keyframe";refImageB64=linkedRef.imgs;}
-    }else{
-      linkedRef={imgs:[],texts:[],diag:['连线参考开关=关闭，本次不带画布连线内容']};
-    }
+    if(!linkRefPool.length)buildLinkRefList(pendingTarget||lastSelected||null);
+    linkedRef=await collectLinkedRefs();
+    if(linkedRef.imgs.length===1){videoMode="keyframe";refImageB64=linkedRef.imgs[0];}
+    else if(linkedRef.imgs.length>=2){videoMode="keyframe";refImageB64=linkedRef.imgs;}
   }
   let fullPrompt=prompt+(refTextExtra?('\n\n【参考剧本/资料】\n'+refTextExtra):'');
   if(linkedRef&&linkedRef.texts.length){
