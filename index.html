@@ -397,12 +397,65 @@ function deserializeEdges(list,nodesArr){
     return null;
   }).filter(e=>e&&e.a&&e.b);
 }
+// 节点序列化：把不可直接 JSON 化的内容（如画布快照）"编译"成字符串，保存时不丢内容
+function serializeNodes(nodesArr){
+  return (nodesArr||[]).map(n=>{
+    const out={};
+    // 拷贝所有可序列化属性，跳过 DOM 元素和运行时状态
+    for(const k of Object.keys(n)){
+      const v=n[k];
+      if(v==null)continue;
+      if(k==='videoEl'||k==='audioEl')continue; // DOM 元素，加载时重建
+      if(k==='videoSnap')continue; // 画布元素，单独编译
+      if(k==='_restoredFrom')continue; // 临时引用，不保存
+      if(k==='_fitted'){out[k]=v;continue;}
+      if(typeof v==='object'&&!(v instanceof Array)&&v.tagName)continue; // 其他 DOM 元素
+      out[k]=v;
+    }
+    // 编译视频快照画布 → base64（保存画面内容，恢复后立即显示）
+    if(n.videoSnap&&n.videoSnap.getContext&&n.videoSnap.width>0){
+      try{out._videoSnapB64=n.videoSnap.toDataURL('image/jpeg',0.82);}catch(e){}
+    }
+    return out;
+  });
+}
+// 节点反序列化：把 base64 等"编译后"的数据还原回画布/运行时对象
+function deserializeNodes(nodesArr){
+  return (nodesArr||[]).map(n=>{
+    n.videoEl=null;n.audioEl=null;n.videoPlaying=false;
+    // 编译回：base64 → 画布元素，作为视频快照立即显示
+    if(n._videoSnapB64){
+      try{
+        const c=document.createElement('canvas');
+        const img=new Image();
+        img.src=n._videoSnapB64;
+        if(img.naturalWidth>0){
+          c.width=img.naturalWidth;c.height=img.naturalHeight;
+          c.getContext('2d').drawImage(img,0,0);
+          n.videoSnap=c;
+        }else{
+          // 图片还在解码，等加载完再画到画布
+          img.onload=()=>{
+            c.width=img.naturalWidth;c.height=img.naturalHeight;
+            c.getContext('2d').drawImage(img,0,0);
+            n.videoSnap=c;
+            draw();
+          };
+        }
+      }catch(e){n.videoSnap=null;}
+      delete n._videoSnapB64;
+    }else{
+      n.videoSnap=null;
+    }
+    return n;
+  });
+}
 function loadProjects(){
   try{return JSON.parse(localStorage.getItem('pavo_projects')||'{}')}catch{return {}}
 }
 function doSaveProjects(){
   const p=loadProjects();
-  p[currentProjectId]={nodes,edges:serializeEdges(),camX,camY,zoom,updated:Date.now()};
+  p[currentProjectId]={nodes:serializeNodes(nodes),edges:serializeEdges(),camX,camY,zoom,updated:Date.now()};
   try{localStorage.setItem('pavo_projects',JSON.stringify(p));}catch(e){}
   scheduleSync();
 }
@@ -422,11 +475,8 @@ function loadProject(id){
   setSelection([]);
   const p=loadProjects();
   const d=p[id]||{nodes:[],edges:[],camX:0,camY:0,zoom:1};
-  nodes=d.nodes||[];
-  nodes.forEach(n=>{
-    n.videoEl=null;n.videoSnap=null;n.videoPlaying=false;
-    ensureVideoEl(n);
-  });
+  nodes=deserializeNodes(d.nodes||[]);
+  nodes.forEach(n=>ensureVideoEl(n));
   edges=deserializeEdges(d.edges,nodes);
   selectedEdge=null;portDrag=null;
   camX=d.camX||0;camY=d.camY||0;zoom=d.zoom||1;
@@ -765,7 +815,7 @@ function exportPNG(){
 }
 async function exportJSON(){
   saveProjects();
-  const data={nodes,edges:serializeEdges(),camX,camY,zoom};
+  const data={nodes:serializeNodes(nodes),edges:serializeEdges(),camX,camY,zoom};
   // 本地上传的文件只存了引用号，必须把本体一起打包，换设备才不丢内容
   const ids=[...new Set(nodes.filter(n=>n._fileId).map(n=>n._fileId))];
   if(ids.length){
@@ -797,7 +847,7 @@ function importJSON(){
   i.onchange=async e=>{
     const f=e.target.files[0];if(!f)return;
     const d=JSON.parse(await f.text());
-    nodes=d.nodes||[];
+    nodes=deserializeNodes(d.nodes||[]);
     edges=deserializeEdges(d.edges,nodes);
     selectedEdge=null;portDrag=null;
     camX=d.camX||0;camY=d.camY||0;zoom=d.zoom||1;
@@ -806,7 +856,6 @@ function importJSON(){
     toast('正在恢复文件内容…');
     // 把随项目打包进来的文件本体解码并写进本机 IndexedDB，之后按引用号取用
     await Promise.all(nodes.map(async n=>{
-      n.videoEl=null;n.videoSnap=null;n.audioEl=null;
       if(!n._fileId||!d.files||!d.files[n._fileId])return;
       try{
         const blob=await(await fetch(d.files[n._fileId])).blob();
@@ -860,18 +909,19 @@ let syncing=false;
 let syncKickTimer=null;
 // 收集节点引用的 IndexedDB 文件，内嵌为 base64（同名 fid），让备份自带内容
 async function embedProjectFiles(proj){
-  const ids=[...new Set((proj.nodes||[]).filter(n=>n&&n._fileId).map(n=>n._fileId))];
+  const nodes=proj.nodes||[];
+  const ids=[...new Set(nodes.filter(n=>n&&n._fileId).map(n=>n._fileId))];
   const files={};
-  let bytes=0;
+  let bytes=0,missing=0;
   for(const fid of ids){
     try{
       const b=await fileDB.get(fid);
-      if(!b)continue;
+      if(!b){missing++;continue;}
       bytes+=b.size;
       files[fid]=await blobToBase64(b);
-    }catch(e){}
+    }catch(e){missing++;}
   }
-  return {files,bytes};
+  return {files,bytes,need:ids.length,missing};
 }
 const SETTINGS=(()=>{
   let s={autoSave:true,autoBackup:true,mode:'now',lastBackup:0};
@@ -922,27 +972,40 @@ async function ensureSyncPerm(silent){
     return null;
   }catch(e){return null;}
 }
-function syncFileName(proj,id){
-  const nm=proj.name||('项目_'+String(id).slice(-6));
-  return String(nm).replace(/[\\/:*?"<>|]/g,'_').slice(0,60)+'.json';
+function syncFileName(proj,id,allNames){
+  let nm=proj.name||('项目_'+String(id).slice(-6));
+  nm=String(nm).replace(/[\\/:*?"<>|]/g,'_').slice(0,60);
+  let fn=nm+'.json';
+  // 多个项目同名时，加 id 后缀防互相覆盖
+  if(allNames&&allNames.get(fn)&&allNames.get(fn)!==id)fn=nm+'_'+String(id).slice(-6)+'.json';
+  return fn;
 }
 async function writeAllToFolder(p){
   if(!syncHandle)return 0;
-  let n=0,bigWarned=0;
+  const allNames=new Map();
+  Object.keys(p).forEach(id=>{
+    const nm=p[id].name||('项目_'+String(id).slice(-6));
+    const base=String(nm).replace(/[\\/:*?"<>|]/g,'_').slice(0,60)+'.json';
+    if(!allNames.has(base))allNames.set(base,id); // 同名时先注册者保留原文件名
+  });
+  let n=0,bigWarned=0,missTotal=0;
   for(const id of Object.keys(p)){
     const proj=p[id];
     try{
-      const {files,bytes}=await embedProjectFiles(proj);
+      const {files,bytes,missing}=await embedProjectFiles(proj);
+      missTotal+=missing||0;
       if(bytes>60*1024*1024&&bigWarned<3){
         bigWarned++;
         toast('⚠ 「'+(proj.name||id)+'」上传素材约 '+Math.round(bytes/1048576)+'MB，备份文件会很大');
       }
-      const fh=await syncHandle.getFileHandle(syncFileName(proj,id),{create:true});
+      const fn=syncFileName(proj,id,allNames);
+      const fh=await syncHandle.getFileHandle(fn,{create:true});
       const w=await fh.createWritable();
       await w.write(JSON.stringify(Object.assign({projectId:id},proj,{_files:files})));
       await w.close();n++;
-    }catch(e){}
+    }catch(e){console.error('backup fail',id,e);}
   }
+  if(missTotal){toast('⚠ '+missTotal+' 个素材文件在本机库中缺失（可能属于其它设备浏览器），未能内嵌');}
   return n;
 }
 async function trySync(manual){
@@ -950,9 +1013,18 @@ async function trySync(manual){
   syncing=true;
   try{
     const p=loadProjects();
+    // 关键：把内存中的实时画面并入待备份数据——自动保存被关闭时，
+    // localStorage 里是旧版本，直接备份会丢刚才的编辑（卡片不全的根因之一）
+    if(currentProjectId&&Array.isArray(nodes)){
+      p[currentProjectId]=Object.assign({},p[currentProjectId]||{},{nodes:serializeNodes(nodes),edges:serializeEdges(),camX,camY,zoom,updated:Date.now()});
+    }
     const n=await writeAllToFolder(p);
     if(n){SETTINGS.lastBackup=Date.now();try{localStorage.setItem('pavo_settings',JSON.stringify(SETTINGS));}catch(e){}}
-    if(manual)toast(n?('✅ 已保存 '+n+' 个项目到数据文件夹（同名覆盖）'):'保存失败：文件夹不可写');
+    if(manual){
+      const cur=p[currentProjectId];
+      const cn=cur&&cur.nodes?cur.nodes.length:0;
+      toast(n?('✅ 已备份 '+n+' 个项目 · 当前项目 '+cn+' 张卡片（含全部卡片数据，素材已内嵌）'):'保存失败：文件夹不可写');
+    }
   }catch(e){
     if(manual)toast('保存出错：'+e.message);
   }finally{syncing=false;}
@@ -1016,7 +1088,7 @@ async function scanFolderBackups(){
         const f=await entry.getFile();
         const d=JSON.parse(await f.text());
         if(!d||!Array.isArray(d.nodes))continue;
-        list.push({rec:d,file:f.name,size:f.size,mtime:f.lastModified});
+        list.push({rec:d,file:f.name,size:f.size,mtime:f.lastModified,nfiles:d._files?Object.keys(d._files).length:0});
       }catch(e){}
     }
   }catch(e){}
@@ -1085,7 +1157,7 @@ async function renderRecoverBody(){
     return '<div style="display:flex;align-items:center;gap:8px;padding:7px 4px;border-bottom:1px solid #22283b">'+
       '<div style="flex:1;min-width:0">'+
       '<div style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">📄 '+nm+' '+dup+'</div>'+
-      '<div style="font-size:11px;color:#8892ab">'+(r.rec.nodes||[]).length+' 个节点 · '+fmtTime(r.mtime)+'</div></div>'+
+      '<div style="font-size:11px;color:#8892ab">'+(r.rec.nodes||[]).length+' 个节点 · 内嵌素材 '+(r.nfiles||0)+' 个'+(r.nfiles?'':'⚠')+' · '+fmtTime(r.mtime)+'</div></div>'+
       '<button class="btn-secondary" style="font-size:12px;padding:5px 8px" onclick="recoverPick('+i+',\'new\')">恢复为新项目</button>'+
       '<button class="btn-secondary" style="font-size:12px;padding:5px 8px" onclick="recoverPick('+i+',\'current\')">覆盖当前</button>'+
       '</div>';
