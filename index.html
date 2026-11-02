@@ -428,19 +428,21 @@ function deserializeNodes(nodesArr){
       try{
         const c=document.createElement('canvas');
         const img=new Image();
-        img.src=n._videoSnapB64;
-        if(img.naturalWidth>0){
-          c.width=img.naturalWidth;c.height=img.naturalHeight;
-          c.getContext('2d').drawImage(img,0,0);
-          n.videoSnap=c;
-        }else{
-          // 图片还在解码，等加载完再画到画布
-          img.onload=()=>{
+        img.onload=()=>{
+          try{
             c.width=img.naturalWidth;c.height=img.naturalHeight;
             c.getContext('2d').drawImage(img,0,0);
             n.videoSnap=c;
             draw();
-          };
+          }catch(e){n.videoSnap=null;}
+        };
+        img.onerror=()=>{n.videoSnap=null;};
+        img.src=n._videoSnapB64;
+        // 如果图片已缓存完成（naturalWidth 立即可用），直接画上去
+        if(img.naturalWidth>0){
+          c.width=img.naturalWidth;c.height=img.naturalHeight;
+          c.getContext('2d').drawImage(img,0,0);
+          n.videoSnap=c;
         }
       }catch(e){n.videoSnap=null;}
       delete n._videoSnapB64;
@@ -1098,14 +1100,12 @@ async function scanFolderBackups(){
 async function restoreEmbeddedFiles(rec){
   if(!rec||!rec._files)return 0;
   let n=0;
+  // 用 fetch 替代同步 XHR：同步 XHR 不支持 responseType='blob'，会导致文件恢复静默失败
   for(const fid of Object.keys(rec._files)){
     try{
-      const r=new XMLHttpRequest();
-      r.open('GET',rec._files[fid],false);
-      r.responseType='blob';
-      r.send();
-      if(r.response){await fileDB.put(fid,r.response);n++;}
-    }catch(e){}
+      const blob=await(await fetch(rec._files[fid])).blob();
+      if(blob&&blob.size>0){await fileDB.put(fid,blob);n++;}
+    }catch(e){console.error('restoreEmbeddedFiles fail',fid,e);}
   }
   return n;
 }
