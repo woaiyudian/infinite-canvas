@@ -528,6 +528,8 @@ function delSel(){
   sel.forEach(n=>{
     if(n._fileId&&!nodes.some(x=>x._fileId===n._fileId))fileDB.del(n._fileId);
   });
+  // 同步覆盖写备份后，孤儿文件已随最新 nodes 列表不再生成
+  if(syncHandle)trySync(false);
   edges=edges.filter(e=>!sel.includes(e.a)&&!sel.includes(e.b));
   if(selectedEdge&&!edges.includes(selectedEdge))selectedEdge=null;
   if(portDrag&&sel.includes(portDrag.node))portDrag=null;
@@ -856,6 +858,21 @@ function updateZoomText(){document.getElementById('zoomLabel').innerText=Math.ro
 let syncHandle=null;
 let syncing=false;
 let syncKickTimer=null;
+// 收集节点引用的 IndexedDB 文件，内嵌为 base64（同名 fid），让备份自带内容
+async function embedProjectFiles(proj){
+  const ids=[...new Set((proj.nodes||[]).filter(n=>n&&n._fileId).map(n=>n._fileId))];
+  const files={};
+  let bytes=0;
+  for(const fid of ids){
+    try{
+      const b=await fileDB.get(fid);
+      if(!b)continue;
+      bytes+=b.size;
+      files[fid]=await blobToBase64(b);
+    }catch(e){}
+  }
+  return {files,bytes};
+}
 const SETTINGS=(()=>{
   let s={autoSave:true,autoBackup:true,mode:'now',lastBackup:0};
   try{Object.assign(s,JSON.parse(localStorage.getItem('pavo_settings')||'{}'));}catch(e){}
@@ -911,13 +928,18 @@ function syncFileName(proj,id){
 }
 async function writeAllToFolder(p){
   if(!syncHandle)return 0;
-  let n=0;
+  let n=0,bigWarned=0;
   for(const id of Object.keys(p)){
     const proj=p[id];
     try{
+      const {files,bytes}=await embedProjectFiles(proj);
+      if(bytes>60*1024*1024&&bigWarned<3){
+        bigWarned++;
+        toast('⚠ 「'+(proj.name||id)+'」上传素材约 '+Math.round(bytes/1048576)+'MB，备份文件会很大');
+      }
       const fh=await syncHandle.getFileHandle(syncFileName(proj,id),{create:true});
       const w=await fh.createWritable();
-      await w.write(JSON.stringify(Object.assign({projectId:id},proj)));
+      await w.write(JSON.stringify(Object.assign({projectId:id},proj,{_files:files})));
       await w.close();n++;
     }catch(e){}
   }
@@ -1000,9 +1022,26 @@ async function scanFolderBackups(){
   }catch(e){}
   return list;
 }
+// 备份里内嵌的 _files 写回本机 IndexedDB，恢复引用内容
+async function restoreEmbeddedFiles(rec){
+  if(!rec||!rec._files)return 0;
+  let n=0;
+  for(const fid of Object.keys(rec._files)){
+    try{
+      const r=new XMLHttpRequest();
+      r.open('GET',rec._files[fid],false);
+      r.responseType='blob';
+      r.send();
+      if(r.response){await fileDB.put(fid,r.response);n++;}
+    }catch(e){}
+  }
+  return n;
+}
 async function recoverApply(rec,mode){
   const p=loadProjects();
   const name=rec.name||rec.recName||'恢复的项目';
+  const emb=await restoreEmbeddedFiles(rec);
+  if(emb)toast('已还原 '+emb+' 个内嵌素材文件');
   const data={nodes:rec.nodes||[],edges:rec.edges||[],camX:rec.camX||0,camY:rec.camY||0,zoom:rec.zoom||1,name,updated:Date.now()};
   let msg='';
   let loadId=null;
@@ -1069,6 +1108,7 @@ async function recoverFileInput(ev){
     try{
       const d=JSON.parse(await f.text());
       if(!d||!Array.isArray(d.nodes)){toast('跳过 '+f.name+'：不是画布备份');continue;}
+      await restoreEmbeddedFiles(d);
       const fid=String(d.name||f.name.replace(/\.json$/i,'')).replace(/[\\/:*?"<>|]/g,'_').slice(0,60)+'.json';
       if(d.projectId&&p[d.projectId]){
         p[d.projectId]={nodes:d.nodes,edges:d.edges||[],camX:d.camX||0,camY:d.camY||0,zoom:d.zoom||1,name:d.name||p[d.projectId].name,updated:Date.now()};
