@@ -220,6 +220,11 @@ body{overflow:hidden;background:#0a0b10;color:#fff;height:100vh;height:100dvh;ov
         <option value="manual">仅手动备份</option>
       </select>
     </div>
+    <div class="form-row">
+      <label>保存路径</label>
+      <span id="setPathName" style="flex:1;font-size:13px;color:#cdd5e1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">未选择</span>
+      <button class="btn-secondary" onclick="changeSyncFolder()" style="flex:0 0 auto;font-size:12px;padding:6px 10px">📁 更改路径</button>
+    </div>
     <div style="font-size:12px;color:#8892ab;margin:4px 0 12px" id="setLastTime"></div>
     <div class="modal-actions">
       <button class="btn-secondary" onclick="saveNowClick()">💾 立即保存</button>
@@ -943,11 +948,29 @@ async function pickSyncFolder(){
     syncHandle=h;
     await syncKV.set('dir',h);
     applySettings();
+    const lab=document.getElementById('setPathName');
+    if(lab)lab.innerText='📂 '+h.name;
     toast('📁 已连接数据文件夹，此后每次操作自动备份');
     trySync(true);
   }catch(e){
     if(e&&e.name==='AbortError')return;
     toast('连接失败：'+(e&&e.message||e));
+  }
+}
+async function changeSyncFolder(){
+  if(!window.showDirectoryPicker){toast('当前浏览器不支持选择文件夹：请在电脑 Chrome/Edge 操作');return;}
+  try{
+    const h=await showDirectoryPicker({mode:'readwrite',id:'pavo-data'});
+    syncHandle=h;
+    await syncKV.set('dir',h);
+    applySettings();
+    const lab=document.getElementById('setPathName');
+    if(lab)lab.innerText=h.name;
+    toast('📁 保存路径已改为「'+h.name+'」');
+    trySync(true);
+  }catch(e){
+    if(e&&e.name==='AbortError')return;
+    toast('选择失败：'+(e&&e.message||e));
   }
 }
 function syncBtnClick(){
@@ -1076,6 +1099,13 @@ function openSettings(){
   document.getElementById('setAutoSave').checked=SETTINGS.autoSave!==false;
   document.getElementById('setAutoBackup').checked=SETTINGS.autoBackup!==false;
   document.getElementById('setMode').value=SETTINGS.mode||'now';
+  (async()=>{
+    const lab=document.getElementById('setPathName');
+    if(!lab)return;
+    let nm=syncHandle?syncHandle.name:'';
+    if(!nm){const h=await syncKV.get('dir');nm=h&&h.name?h.name:'';}
+    lab.innerText=nm?('📂 '+nm):'未选择（点右侧按钮选文件夹）';
+  })();
   document.getElementById('setLastTime').innerText=SETTINGS.lastBackup?('上次备份：'+fmtTime(SETTINGS.lastBackup)+(syncHandle?'':'（当前浏览器未连接数据文件夹）')):'尚未备份过';
   document.getElementById('setModal').style.display='flex';
 }
