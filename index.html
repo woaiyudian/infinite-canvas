@@ -62,8 +62,20 @@ body{overflow:hidden;background:#0a0b10;color:#fff;height:100vh;height:100dvh;ov
 .wait-warn{font-size:12px;color:#fbbf24;margin:2px 0 14px}
 .wait-raw{display:none;max-height:130px;overflow:auto;font-size:11px;color:#9fe3c0;background:#0a0b10;border:1px solid #2d3348;border-radius:6px;padding:6px 8px;margin:0 0 12px;text-align:left;white-space:pre-wrap;word-break:break-all}
 @media (max-width:640px),(pointer:coarse){
-  .modal-content{width:calc(100vw - 20px);max-height:calc(100dvh - 40px);overflow-y:auto}
-  .edit-modal{left:10px!important}
+  .modal-content{width:calc(100vw - 20px);max-height:calc(100dvh - 40px);overflow-y:auto;padding:16px}
+  .modal-content h3{font-size:15px;margin-bottom:12px}
+  .form-row{flex-direction:column;align-items:stretch;gap:6px;margin:12px 0}
+  .form-row label{width:auto;font-size:12px;color:#94a3b8}
+  .modal-content input,.modal-content textarea,.modal-content select{font-size:15px;padding:10px}
+  .modal-content textarea{min-height:100px}
+  .modal-actions{flex-direction:column-reverse;gap:8px}
+  .modal-actions button{width:100%;padding:12px;font-size:15px}
+  #aiRefTip,#linkRefBox{margin-left:0!important}
+  #linkRefBox{max-height:140px}
+  .edit-modal{left:10px!important;right:10px;width:auto!important;top:auto!important;bottom:10px;padding:16px;border-radius:12px}
+  .edit-modal input,.edit-modal textarea{font-size:15px;padding:10px}
+  .edit-modal textarea{min-height:120px}
+  .edit-modal button{padding:10px 16px;font-size:15px}
   .toolbar{top:56px;padding:6px;gap:6px}
   .tool-btn{width:40px;height:40px;font-size:17px}
   .zoom-bar{bottom:10px;padding:4px 8px}
@@ -2732,12 +2744,15 @@ function tsFinish(e){
     else if(!ts.moved&&!ts.longFired){
       const now=Date.now();
       const tNode=ts.node;
-      if(tNode&&(tNode.type==='audio'||tNode.type==='doc')&&now-lastTapTime<400&&lastTapNode===tNode){
-        if(tNode.type==='audio')playAudioNode(tNode);else openDocNode(tNode);
+      // 移动端双击卡片：与桌面端 dblclick 行为一致
+      if(tNode&&now-lastTapTime<400&&lastTapNode===tNode){
+        if(tNode.type==='audio'){playAudioNode(tNode);}
+        else if(tNode.type==='doc'){openDocNode(tNode);}
+        else{openAIModal(tNode);} // 文本/图片/视频卡片：双击打开AI生成 + 编辑
         lastTapTime=0;lastTapNode=null;
       }else{
         lastTapTime=now;lastTapNode=tNode;
-        toast('已选中节点，长按打开操作菜单');
+        toast('已选中节点，双击编辑/AI生成 · 长按打开菜单');
       }
     }
     dragNodes=null;dragN=null;pressInfo=null;
