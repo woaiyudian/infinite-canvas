@@ -1194,12 +1194,15 @@ async function runAI(){
       if(linkedRef.imgs.length){refImg=linkedRef.imgs[0];refSrc='连线清单勾选的画面';}
       if(linkedRef.texts.length)fullPrompt+='\n\n【画布连线节点的剧本/设定】\n'+linkedRef.texts.join('\n---\n');
     }
+    if(refImg){
+      fullPrompt='【首要要求】必须严格以所附参考图为基准生成：保持参考图中的人物形象、服装、构图布局与整体配色风格，禁止重新设计角色或另起场景。\n\n'+fullPrompt;
+    }
     const payload={model:'agnes-image-2.5-flash',prompt:fullPrompt,size:size};
     if(!isNaN(seed)&&seed>=0)payload.seed=seed;
     if(refImg)payload.image=refImg;
     const ctl=beginWait('图片生成中');
     if(!ctl){toast('已有任务在生成中，请等它完成或先取消');return;}
-    if(refImg)waitMsg('✅ 已带上画面参考（图生图模式）：来自'+refSrc);
+    if(refImg)waitMsg('✅ 图生图模式：参考来自'+refSrc+'（约 '+Math.round(refImg.length/1024)+'KB）');
     else waitMsg('⚠ 本次无画面参考，为纯文字生图（可上传附件或在连线清单勾选画面）');
     if(linkedRef)showRaw('【连线参考诊断】\n'+linkedRef.diag.join('\n')+'\n\n请求体实际字段：'+(payload.image?'image=已附带参考画面':'image=无')+'，提示词共 '+fullPrompt.length+' 字符');
     closeAIModal();
