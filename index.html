@@ -405,8 +405,12 @@ function newProject(){
 function delProject(id){
   if(!confirm('确定删除这个项目？'))return;
   const p=loadProjects();
+  const gone=p[id];
   delete p[id];
   localStorage.setItem('pavo_projects',JSON.stringify(p));
+  if(syncHandle&&gone){
+    try{syncHandle.removeEntry(syncFileName(gone,id)).catch(()=>{});}catch(e){}
+  }
   if(syncHandle)trySync(false);
   if(currentProjectId===id)newProject();
   else refreshTopBar();
@@ -422,11 +426,16 @@ function refreshTopBar(){
     name.innerText=p[id].name||('项目 '+id.slice(-6));
     name.ondblclick=(ev)=>{
       ev.stopPropagation();
+      const oldNm=syncFileName(p[id],id);
       const nn=prompt('重命名',p[id].name||'');
       if(nn!==null){
         p[id].name=nn;
         p[id].updated=Date.now();
         localStorage.setItem('pavo_projects',JSON.stringify(p));
+        // 名字变了：先删旧名备份，随后自动写入新名备份
+        if(syncHandle&&oldNm!==syncFileName(p[id],id)){
+          try{syncHandle.removeEntry(oldNm).catch(()=>{});}catch(e){}
+        }
         scheduleSync();
         refreshTopBar();
       }
@@ -1007,6 +1016,10 @@ function openRecoverModal(){
 function closeRecoverModal(){
   document.getElementById('recoverModal').style.display='none';
 }
+// 点弹窗外的遮罩空白处即关闭，避免挡住顶栏导致无法双击重命名
+document.getElementById('recoverModal').addEventListener('click',e=>{
+  if(e.target.id==='recoverModal')closeRecoverModal();
+});
 
 // ---- 本地文件仓库（IndexedDB）：上传的原始文件永久存在浏览器库里 ----
 const fileDB=(()=>{
@@ -2545,6 +2558,7 @@ window.addEventListener('keydown',e=>{
   }
   else if(e.key==='Escape'){
     closeCtxMenu();
+    if(document.getElementById('recoverModal').style.display==='flex'){closeRecoverModal();return;}
     portDrag=null;
     if(connectPendingNode){connectPendingNode=null;toast('已取消连线起点');}
     else if(selectedEdge){selectedEdge=null;}
