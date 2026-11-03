@@ -1950,7 +1950,7 @@ async function runAI(){
     fullPrompt+='\n\n【画布连线节点的剧本/设定】\n'+linkedRef.texts.join('\n---\n');
   }
   const payload={
-    model:"agnes-video-2.5-flash",
+    model:"agents-video-3.0-flash",
     prompt:fullPrompt,
     mode:videoMode,
     seconds:String(dur),
@@ -2008,7 +2008,7 @@ async function runAI(){
     if(!waitCtl||waitCtl.cancelled)return;
     let pr=null,pd=null,nerr=null;
     try{
-      pr=await fetch(pollBase+"/agnesapi?video_id="+vid+"&model_name=agnes-video-2.5-flash",{
+      pr=await fetch(pollBase+"/agnesapi?video_id="+vid+"&model_name=agents-video-3.0-flash",{
         headers:{"Authorization":"Bearer "+API_KEY}
       });
       pd=await pr.json();
@@ -2343,7 +2343,7 @@ function drawEdge(a,b,o){
   ctx.save();
   ctx.globalAlpha=o.alpha==null?1:o.alpha;
   ctx.strokeStyle=o.color||'#ffffff';
-  ctx.lineWidth=(o.width||2)/zoom;
+  ctx.lineWidth=(o.width||1.2)/zoom;
   ctx.lineCap='round';
   ctx.setLineDash([7/zoom,6/zoom]);
   ctx.lineDashOffset=(o.flow||0)/zoom;
