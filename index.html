@@ -447,6 +447,7 @@ function serializeNodes(nodesArr){
       if(v==null)continue;
       if(k==='videoEl'||k==='audioEl')continue; // DOM 元素，加载时重建
       if(k==='videoSnap')continue; // 画布元素，单独编译
+      if(k==='_genState')continue; // 生成中运行时状态，不保存
       if(k==='_restoredFrom')continue; // 临时引用，不保存
       if(k==='_fitted'){out[k]=v;continue;}
       if(typeof v==='object'&&!(v instanceof Array)&&v.tagName)continue; // 其他 DOM 元素
@@ -617,6 +618,14 @@ function delSel(){
   if(!sel.length){toast('没有选中节点');return;}
   sel.forEach(n=>{
     destroyVideo(n);
+    // 如果正在生成中，取消生成
+    if(n._genState){
+      if(n._genState.ctl)n._genState.ctl.cancelled=true;
+      if(waitCtl&&waitCtl.node===n){
+        if(waitCtl.timer)clearInterval(waitCtl.timer);
+        waitCtl=null;
+      }
+    }
     const i=nodes.indexOf(n);
     if(i>-1)nodes.splice(i,1);
   });
@@ -1328,7 +1337,7 @@ function manualRetrySleep(){
   renderSleepList();
   // 重新提交
   pendingTarget=item.targetId?nodes.find(n=>n.id===item.targetId):null;
-  const ctl=beginWait('🎬 生成视频（手动重试）');
+  const ctl=beginWait('🎬 生成视频（手动重试）',pendingTarget||null,'video');
   if(!ctl){addToSleepQueue(item);renderSleepList();return;}
   doSubmitVideo(item.payload,ctl,0,item);
 }
@@ -1919,10 +1928,10 @@ async function runAI(){
     const payload={model:'agnes-image-2.5-flash',prompt:fullPrompt,size:size};
     if(!isNaN(seed)&&seed>=0)payload.seed=seed;
     if(refImg)payload.image=refImg;
-    const ctl=beginWait('图片生成中');
+    const ctl=beginWait('图片生成中',pendingTarget||null,'image');
     if(!ctl){toast('已有任务在生成中，请等它完成或先取消');return;}
-    if(refImg)waitMsg('✅ 图生图模式：参考来自'+refSrc+'（约 '+Math.round(refImg.length/1024)+'KB）');
-    else waitMsg('⚠ 本次无画面参考，为纯文字生图（可上传附件或在连线清单勾选画面）');
+    if(refImg)waitMsg('图生图：'+refSrc+' '+Math.round(refImg.length/1024)+'KB');
+    else waitMsg('纯文字生图');
     if(linkedRef)showRaw('【连线参考诊断】\n'+linkedRef.diag.join('\n')+'\n\n请求体实际字段：'+(payload.image?'image=已附带参考画面':'image=无')+'，提示词共 '+fullPrompt.length+' 字符');
     closeAIModal();
     try{
@@ -2015,11 +2024,11 @@ async function runAI(){
   };
   if(videoMode==="keyframe")payload.image=refImageB64;
   if(videoMode==="reference")payload.video=refVideoB64;
-  const ctl=beginWait('视频生成排队中');
-  if(!ctl){toast('已有任务在排队，请等它完成或先取消');return;}
+  const ctl=beginWait('视频生成排队中',pendingTarget||null,'video');
+  if(!ctl){toast('已有任务在生成中，请等它完成或先取消');return;}
   if(linkedRef){
     const d=linkedRef.diag.join('\n');
-    waitMsg(linkedRef.imgs.length?('✅ 已自动带入 '+linkedRef.imgs.length+' 个连线画面作为'+(linkedRef.imgs.length>1?'首尾帧':'参考图')+(linkedRef.texts.length?'，并注入 '+linkedRef.texts.length+' 段剧本文字':'')):(linkedRef.texts.length?('✅ 已注入 '+linkedRef.texts.length+' 段连线剧本文字（无画面参考）'):'⚠ 未带上任何连线参考，原因见下方原始返回'));
+    waitMsg(linkedRef.imgs.length?('带入 '+linkedRef.imgs.length+' 张参考图'):(linkedRef.texts.length?('注入 '+linkedRef.texts.length+' 段文字'):'无参考'));
     showRaw('【连线参考诊断】\n'+d+'\n\n实际请求体字段：mode='+videoMode+(refImageB64?('，image='+String(JSON.stringify(refImageB64).slice(0,60))+'…'):'，无画面参考')+(fullPrompt.length!==prompt.length?('，提示词含注入文字(共'+fullPrompt.length+'字符)'):'，提示词未注入'));
   }
   // 参考素材已转成 base64 写进 payload，原引用可释放
@@ -2088,7 +2097,7 @@ async function processSleepQueue(){
   renderSleepList();
   if(item.type==='video'){
     pendingTarget=item.targetId?nodes.find(n=>n.id===item.targetId):null;
-    const ctl=beginWait('🎬 生成视频（凌晨低峰重试）');
+    const ctl=beginWait('🎬 生成视频（凌晨低峰重试）',pendingTarget||null,'video');
     if(ctl){
       doSubmitVideo(item.payload,ctl,0,item);
       // 等当前任务结束后再安排下一个
@@ -2114,7 +2123,7 @@ async function generateVideoFromItem(item){
   const payload=item.payload;
   pendingTarget=item.targetId?nodes.find(n=>n.id===item.targetId):null;
   // 直接调用内部提交逻辑
-  const ctl=beginWait('🎬 生成视频（凌晨低峰重试）');
+  const ctl=beginWait('🎬 生成视频（凌晨低峰重试）',pendingTarget||null,'video');
   if(!ctl)return;
   doSubmitVideo(payload,ctl,0,item);
 }
@@ -2265,39 +2274,59 @@ function fmtMs(ms){
   const s=Math.floor(ms/1000);
   return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');
 }
-function beginWait(title){
-  if(waitCtl&&!waitCtl.cancelled)return null;
-  const ctl={cancelled:false,t0:Date.now(),tries:0,timer:null};
+function beginWait(title,node,kind){
+  if(waitCtl&&!waitCtl.cancelled)return null; // 已有任务在跑
+  // 如果没有目标卡片，创建一个占位卡片放在画布中心
+  if(!node){
+    const c=getViewCenterPos();
+    node={
+      x:c.x-90,y:c.y-70,w:180,h:140,
+      title:kind==='image'?'AI生成图片':'AI生成视频',
+      type:kind==='image'?'img':'video',
+      isVideo:kind==='video',
+      src:null,_objectUrl:null,videoEl:null,videoSnap:null
+    };
+    nodes.push(node);
+    setSelection([node]);
+    pendingTarget=node; // 设为目标，生成完成后直接写回
+  }
+  if(node._genState)return null; // 已经在生成中
+  const ctl={cancelled:false,t0:Date.now(),tries:0,timer:null,node:node};
+  node._genState={msg:'正在提交任务…',t0:ctl.t0,tries:0,kind:kind||'video',ctl:ctl,raw:''};
   waitCtl=ctl;
-  const mask=document.getElementById('waitMask');
-  mask.querySelector('.wait-title').innerText=title;
-  mask.querySelector('.wait-msg').innerText='正在提交任务…';
-  document.getElementById('waitRaw').style.display='none';
-  mask.classList.add('show');
   ctl.timer=setInterval(()=>{
-    document.getElementById('waitSub').innerText='已等待 '+fmtMs(Date.now()-ctl.t0)+' · 重试 '+ctl.tries+' 次';
+    if(node._genState){node._genState.tries=ctl.tries;}
   },1000);
+  draw();
+  saveProjects();
   return ctl;
 }
 function waitSubTick(){
-  if(!waitCtl)return;
-  document.getElementById('waitSub').innerText='已等待 '+fmtMs(Date.now()-waitCtl.t0)+' · 重试 '+waitCtl.tries+' 次';
+  if(!waitCtl||!waitCtl.node||!waitCtl.node._genState)return;
+  waitCtl.node._genState.tries=waitCtl.tries;
 }
 function waitMsg(msg){
-  const el=document.getElementById('waitMsg');
-  if(el)el.innerText=msg;
+  if(!waitCtl||!waitCtl.node||!waitCtl.node._genState)return;
+  waitCtl.node._genState.msg=msg;
 }
 function endWait(){
   if(waitCtl&&waitCtl.timer)clearInterval(waitCtl.timer);
+  if(waitCtl&&waitCtl.node&&waitCtl.node._genState){
+    delete waitCtl.node._genState;
+  }
   waitCtl=null;
-  document.getElementById('waitMask').classList.remove('show');
+  draw();
 }
-// 把接口原始返回显示在遮罩上，任何结构都能看到
+// 把接口原始返回记录在节点状态里
 function showRaw(txt){
-  const el=document.getElementById('waitRaw');
-  if(!el)return;
-  el.innerText='接口原始返回：\n'+txt;
-  el.style.display='block';
+  if(!waitCtl||!waitCtl.node||!waitCtl.node._genState)return;
+  waitCtl.node._genState.raw=txt;
+}
+function cancelWait(){
+  if(!waitCtl)return;
+  waitCtl.cancelled=true;
+  endWait();
+  toast('已取消生成');
 }
 // 宽容提取：不管返回字段叫什么，递归找出视频/图片地址（URL 或 base64）
 function extractResult(obj,kind){
@@ -2374,6 +2403,20 @@ function buildMenuItems(target){
   const selCount=selectedNodes.size;
   if(target.type==='node'){
     const n=target.node;
+    // 如果节点正在生成中，优先显示取消选项
+    if(n._genState){
+      items.push({label:'取消生成',icon:'🚫',danger:true,action:()=>{
+        if(n._genState&&n._genState.ctl)n._genState.ctl.cancelled=true;
+        delete n._genState;
+        if(waitCtl&&waitCtl.node===n){
+          if(waitCtl.timer)clearInterval(waitCtl.timer);
+          waitCtl=null;
+        }
+        draw();
+        toast('已取消生成');
+      }});
+      items.push({sep:true});
+    }
     items.push({label:'编辑节点内容',icon:'✏️',action:()=>openEditModal(n)});
     items.push({label:'重命名',icon:'🔤',action:()=>{
       const nn=prompt('节点标题',n.title);
@@ -2680,6 +2723,47 @@ function draw(){
     ctx.fill();
     ctx.fillStyle='#fff';
     ctx.fillText(n.title,n.x+13,n.y+20);
+    // 生成中状态遮罩
+    if(n._genState){
+      ctx.save();
+      roundRect(n.x,n.y,n.w,n.h,10);
+      ctx.fillStyle='rgba(10,11,16,.72)';
+      ctx.fill();
+      // 旋转加载圈
+      const cx=n.x+n.w/2, cy=n.y+n.h/2-10;
+      const t=performance.now()/600;
+      ctx.strokeStyle='#a78bfa';
+      ctx.lineWidth=2.5;
+      ctx.lineCap='round';
+      ctx.beginPath();
+      ctx.arc(cx,cy,16,t,t+Math.PI*1.3);
+      ctx.stroke();
+      // 状态文字
+      ctx.fillStyle='#e0d7ff';
+      ctx.font='12px system-ui';
+      ctx.textAlign='center';
+      const msg=n._genState.msg||'生成中…';
+      ctx.fillText(msg,cx,cy+36);
+      // 等待时间+重试
+      ctx.fillStyle='#8b8aa3';
+      ctx.font='11px system-ui';
+      const elapsed=fmtMs(Date.now()-n._genState.t0);
+      const tries=n._genState.tries>0?(' · 重试'+n._genState.tries+'次'):'';
+      ctx.fillText(elapsed+tries,cx,cy+52);
+      ctx.textAlign='left';
+      // 类型标签
+      const kindLabel=n._genState.kind==='video'?'🎬 视频生成':'🖼 图片生成';
+      ctx.fillStyle='#c4b5fd';
+      ctx.font='bold 11px system-ui';
+      ctx.fillText(kindLabel,n.x+12,n.y+n.h-12);
+      // 取消提示
+      ctx.fillStyle='#6b7488';
+      ctx.font='10px system-ui';
+      ctx.textAlign='right';
+      ctx.fillText('右键取消',n.x+n.w-12,n.y+n.h-12);
+      ctx.textAlign='left';
+      ctx.restore();
+    }
     ctx.strokeStyle=isSel?'#7c3aed':'#444b66';
     if(connectPendingNode===n)ctx.strokeStyle='#22c55e';
     ctx.lineWidth=(isSel?(lastSelected===n?3:2):2)/zoom;
