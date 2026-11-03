@@ -375,7 +375,7 @@ function captureVideoSnap(node){
   c.width=v.videoWidth;
   c.height=v.videoHeight;
   const cc=c.getContext('2d');
-  try{cc.drawImage(v,0,0);node.videoSnap=c;}catch(e){}
+  try{cc.drawImage(v,0,0);node.videoSnap=c;draw();}catch(e){}
 }
 function ensureVideoEl(n){
   if(n.isVideo&&n._objectUrl&&(!n.videoEl||typeof n.videoEl.pause!=='function')){
@@ -1143,7 +1143,9 @@ async function recoverApply(rec,mode){
   refreshTopBar();
   scheduleSync();
   loadProject(loadId);
-  toast('✅ '+msg);
+  const nc=(rec.nodes||[]).length;
+  const ec=(rec.edges||[]).length;
+  toast('✅ '+msg+'（'+nc+' 张卡片 · '+ec+' 条连线'+(emb?' · '+emb+' 个素材':'')+'）');
 }
 function fmtTime(t){try{return new Date(t).toLocaleString();}catch(e){return '';}}
 async function renderRecoverBody(){
@@ -1332,6 +1334,24 @@ async function rehydrateFile(n){
     n._objectUrl=url;
     n.videoEl=null;
     ensureVideoEl(n);
+    // 视频元数据加载后触发重绘，让缩略图及时显示
+    if(n.videoEl){
+      const onReady=()=>{draw();n.videoEl.removeEventListener('loadeddata',onReady);};
+      n.videoEl.addEventListener('loadeddata',onReady);
+    }
+  }else if(n.type==='img'){
+    // 图片恢复后清除旧缓存并触发重绘
+    delete imgCache[url];
+    const im=new Image();
+    im.onload=()=>{
+      if(!n._fitted){fitNodeByAspect(n,im.naturalWidth,im.naturalHeight);n._fitted=true;}
+      draw();
+    };
+    im.src=url;
+    imgCache[url]=im;
+  }else{
+    // 其他类型（音频、文档等）也触发一次重绘
+    draw();
   }
 }
 // 双击文档节点 = 下载原文件 / 新标签打开
