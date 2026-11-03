@@ -62,8 +62,20 @@ body{overflow:hidden;background:#0a0b10;color:#fff;height:100vh;height:100dvh;ov
 .wait-warn{font-size:12px;color:#fbbf24;margin:2px 0 14px}
 .wait-raw{display:none;max-height:130px;overflow:auto;font-size:11px;color:#9fe3c0;background:#0a0b10;border:1px solid #2d3348;border-radius:6px;padding:6px 8px;margin:0 0 12px;text-align:left;white-space:pre-wrap;word-break:break-all}
 @media (max-width:640px),(pointer:coarse){
-  .modal-content{width:calc(100vw - 20px);max-height:calc(100dvh - 40px);overflow-y:auto}
-  .edit-modal{left:10px!important}
+  .modal-content{width:calc(100vw - 20px);max-height:calc(100dvh - 40px);overflow-y:auto;padding:16px}
+  .modal-content h3{font-size:15px;margin-bottom:12px}
+  .form-row{flex-direction:column;align-items:stretch;gap:6px;margin:12px 0}
+  .form-row label{width:auto;font-size:12px;color:#94a3b8}
+  .modal-content input,.modal-content textarea,.modal-content select{font-size:15px;padding:10px}
+  .modal-content textarea{min-height:100px}
+  .modal-actions{flex-direction:column-reverse;gap:8px}
+  .modal-actions button{width:100%;padding:12px;font-size:15px}
+  #aiRefTip,#linkRefBox{margin-left:0!important}
+  #linkRefBox{max-height:140px}
+  .edit-modal{left:10px!important;right:10px;width:auto!important;top:auto!important;bottom:10px;padding:16px;border-radius:12px}
+  .edit-modal input,.edit-modal textarea{font-size:15px;padding:10px}
+  .edit-modal textarea{min-height:120px}
+  .edit-modal button{padding:10px 16px;font-size:15px}
   .toolbar{top:56px;padding:6px;gap:6px}
   .tool-btn{width:40px;height:40px;font-size:17px}
   .zoom-bar{bottom:10px;padding:4px 8px}
@@ -87,6 +99,7 @@ body{overflow:hidden;background:#0a0b10;color:#fff;height:100vh;height:100dvh;ov
   <button class="tool-btn" onclick="uploadAsset()" title="上传图片/视频素材">🖼</button>
   <button class="tool-btn" onclick="exportPNG()" title="导出画布截图">📸</button>
   <button class="tool-btn" onclick="exportSelectedContents()" title="导出选中卡片的内容(文字/图片/视频)">📤</button>
+  <button class="tool-btn" id="setBtn" onclick="openSettings()" title="自动保存设置">⚙️</button>
   <button class="tool-btn" onclick="syncBtnClick()" title="数据文件夹：立即备份/恢复（配合微力同步）">🔄</button>
   <button class="tool-btn" onclick="exportJSON()" title="导出项目文件">💾</button>
   <button class="tool-btn" onclick="importJSON()" title="导入项目文件">📂</button>
@@ -176,9 +189,22 @@ body{overflow:hidden;background:#0a0b10;color:#fff;height:100vh;height:100dvh;ov
     <div class="form-row" style="margin-top:10px">
       <button class="btn-secondary" onclick="document.getElementById('rcvFile').click()">📂 选择备份文件</button>
       <input type="file" id="rcvFile" accept=".json" multiple style="display:none" onchange="recoverFileInput(event)">
+      <button class="btn-secondary" onclick="showHistoryModal()">🕐 历史版本</button>
       <button class="btn-secondary" onclick="closeRecoverModal()">跳过，直接进入</button>
     </div>
     <div style="font-size:11px;color:#6b7488">备份文件名=项目名，同名自动覆盖；由微力同步在多设备间搬运</div>
+  </div>
+</div>
+
+<div class="modal" id="historyModal">
+  <div class="modal-content" style="width:520px">
+    <h3>🕐 历史版本</h3>
+    <div id="histProject" style="margin-bottom:10px;font-size:13px;color:#94a3b8">选择项目查看历史版本</div>
+    <div id="histBody" style="max-height:360px;overflow-y:auto;font-size:13px"></div>
+    <div class="form-row" style="margin-top:10px;justify-content:flex-end">
+      <button class="btn-secondary" onclick="closeHistoryModal()">关闭</button>
+    </div>
+    <div style="font-size:11px;color:#6b7488">每个项目保留最近 20 个历史版本，回滚前请确认当前内容已不需要</div>
   </div>
 </div>
 
@@ -193,6 +219,60 @@ body{overflow:hidden;background:#0a0b10;color:#fff;height:100vh;height:100dvh;ov
   </div>
 </div>
 
+<div class="modal" id="setModal">
+  <div class="modal-content" style="width:430px">
+    <h3>⚙️ 自动保存设置</h3>
+    <div class="form-row">
+      <label>自动保存</label>
+      <label style="width:auto;flex:1;display:flex;gap:8px;align-items:flex-start;font-size:13px;line-height:1.5">
+        <input type="checkbox" id="setAutoSave" style="flex:0 0 auto;margin-top:3px;width:auto">
+        <span>每次操作自动保存到浏览器<br><small style="color:#8892ab">关闭后改动只在内存，需手动点"立即保存"；刷新页面会丢未保存内容</small></span>
+      </label>
+    </div>
+    <div class="form-row">
+      <label>自动备份</label>
+      <label style="width:auto;flex:1;display:flex;gap:8px;align-items:flex-start;font-size:13px;line-height:1.5">
+        <input type="checkbox" id="setAutoBackup" style="flex:0 0 auto;margin-top:3px;width:auto">
+        <span>同步写入数据文件夹<br><small style="color:#8892ab">需先用 🔄 连接文件夹（配合微力同步跨设备）</small></span>
+      </label>
+    </div>
+    <div class="form-row">
+      <label>备份频率</label>
+      <select id="setMode">
+        <option value="now">操作后立即备份</option>
+        <option value="30s">每 30 秒备份一次</option>
+        <option value="5m">每 5 分钟备份一次</option>
+        <option value="manual">仅手动备份</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label>保存路径</label>
+      <span id="setPathName" style="flex:1;font-size:13px;color:#cdd5e1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">未选择</span>
+      <button class="btn-secondary" onclick="changeSyncFolder()" style="flex:0 0 auto;font-size:12px;padding:6px 10px">📁 更改路径</button>
+    </div>
+    <div style="font-size:12px;color:#8892ab;margin:4px 0 12px" id="setLastTime"></div>
+    <div style="border-top:1px solid #2d3348;margin:8px 0;padding-top:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <h4 style="margin:0;font-size:14px">🕐 视频生成休眠队列</h4>
+        <span id="sleepBadge" style="font-size:12px;color:#a78bfa"></span>
+      </div>
+      <div id="sleepList" style="font-size:12px;color:#8892ab;max-height:120px;overflow-y:auto;margin-bottom:8px">暂无休眠任务</div>
+      <div style="display:flex;gap:8px">
+        <button class="btn-secondary" onclick="manualRetrySleep()" style="flex:1;font-size:12px">▶ 立即重试第一个</button>
+        <button class="btn-secondary" onclick="clearSleepQueue()" style="flex:1;font-size:12px">🗑 清空队列</button>
+      </div>
+      <div style="font-size:11px;color:#6b7488;margin-top:6px">
+        队列满连续失败3次后自动加入，凌晨1-6点自动逐个重试
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-secondary" onclick="saveNowClick()">💾 立即保存</button>
+      <button class="btn-secondary" onclick="closeSettings();showHistoryModal()">🕐 历史版本</button>
+      <button class="btn-secondary" onclick="closeSettings()">取消</button>
+      <button class="btn-primary" onclick="saveSettings()">保存设置</button>
+    </div>
+  </div>
+</div>
 <div class="ctx-menu" id="ctxMenu"></div>
 <div id="toast"></div>
 <div class="wait-mask" id="waitMask">
@@ -323,7 +403,7 @@ function captureVideoSnap(node){
   c.width=v.videoWidth;
   c.height=v.videoHeight;
   const cc=c.getContext('2d');
-  try{cc.drawImage(v,0,0);node.videoSnap=c;}catch(e){}
+  try{cc.drawImage(v,0,0);node.videoSnap=c;draw();}catch(e){}
 }
 function ensureVideoEl(n){
   if(n.isVideo&&n._objectUrl&&(!n.videoEl||typeof n.videoEl.pause!=='function')){
@@ -357,14 +437,78 @@ function deserializeEdges(list,nodesArr){
     return null;
   }).filter(e=>e&&e.a&&e.b);
 }
+// 节点序列化：把不可直接 JSON 化的内容（如画布快照）"编译"成字符串，保存时不丢内容
+function serializeNodes(nodesArr){
+  return (nodesArr||[]).map(n=>{
+    const out={};
+    // 拷贝所有可序列化属性，跳过 DOM 元素和运行时状态
+    for(const k of Object.keys(n)){
+      const v=n[k];
+      if(v==null)continue;
+      if(k==='videoEl'||k==='audioEl')continue; // DOM 元素，加载时重建
+      if(k==='videoSnap')continue; // 画布元素，单独编译
+      if(k==='_genState')continue; // 生成中运行时状态，不保存
+      if(k==='_restoredFrom')continue; // 临时引用，不保存
+      if(k==='_fitted'){out[k]=v;continue;}
+      if(typeof v==='object'&&!(v instanceof Array)&&v.tagName)continue; // 其他 DOM 元素
+      out[k]=v;
+    }
+    // 编译视频快照画布 → base64（保存画面内容，恢复后立即显示）
+    if(n.videoSnap&&n.videoSnap.getContext&&n.videoSnap.width>0){
+      try{out._videoSnapB64=n.videoSnap.toDataURL('image/jpeg',0.82);}catch(e){}
+    }
+    return out;
+  });
+}
+// 节点反序列化：把 base64 等"编译后"的数据还原回画布/运行时对象
+function deserializeNodes(nodesArr){
+  return (nodesArr||[]).map(n=>{
+    n.videoEl=null;n.audioEl=null;n.videoPlaying=false;
+    // 编译回：base64 → 画布元素，作为视频快照立即显示
+    if(n._videoSnapB64){
+      try{
+        const c=document.createElement('canvas');
+        const img=new Image();
+        img.onload=()=>{
+          try{
+            c.width=img.naturalWidth;c.height=img.naturalHeight;
+            c.getContext('2d').drawImage(img,0,0);
+            n.videoSnap=c;
+            draw();
+          }catch(e){n.videoSnap=null;}
+        };
+        img.onerror=()=>{n.videoSnap=null;};
+        img.src=n._videoSnapB64;
+        // 如果图片已缓存完成（naturalWidth 立即可用），直接画上去
+        if(img.naturalWidth>0){
+          c.width=img.naturalWidth;c.height=img.naturalHeight;
+          c.getContext('2d').drawImage(img,0,0);
+          n.videoSnap=c;
+        }
+      }catch(e){n.videoSnap=null;}
+      delete n._videoSnapB64;
+    }else{
+      n.videoSnap=null;
+    }
+    return n;
+  });
+}
 function loadProjects(){
   try{return JSON.parse(localStorage.getItem('pavo_projects')||'{}')}catch{return {}}
 }
-function saveProjects(){
+function doSaveProjects(){
   const p=loadProjects();
-  p[currentProjectId]={nodes,edges:serializeEdges(),camX,camY,zoom,updated:Date.now()};
+  // 保留项目原有属性（name等），只更新节点和视图数据
+  p[currentProjectId]=Object.assign({},p[currentProjectId]||{},{
+    nodes:serializeNodes(nodes),edges:serializeEdges(),
+    camX,camY,zoom,updated:Date.now()
+  });
   try{localStorage.setItem('pavo_projects',JSON.stringify(p));}catch(e){}
   scheduleSync();
+}
+function saveProjects(){
+  if(SETTINGS.autoSave===false)return; // 自动保存已关闭：改动只留在内存，需"立即保存"
+  doSaveProjects();
 }
 let saveTimer=null;
 function scheduleSave(){
@@ -378,11 +522,8 @@ function loadProject(id){
   setSelection([]);
   const p=loadProjects();
   const d=p[id]||{nodes:[],edges:[],camX:0,camY:0,zoom:1};
-  nodes=d.nodes||[];
-  nodes.forEach(n=>{
-    n.videoEl=null;n.videoSnap=null;n.videoPlaying=false;
-    ensureVideoEl(n);
-  });
+  nodes=deserializeNodes(d.nodes||[]);
+  nodes.forEach(n=>ensureVideoEl(n));
   edges=deserializeEdges(d.edges,nodes);
   selectedEdge=null;portDrag=null;
   camX=d.camX||0;camY=d.camY||0;zoom=d.zoom||1;
@@ -477,6 +618,14 @@ function delSel(){
   if(!sel.length){toast('没有选中节点');return;}
   sel.forEach(n=>{
     destroyVideo(n);
+    // 如果正在生成中，取消生成
+    if(n._genState){
+      if(n._genState.ctl)n._genState.ctl.cancelled=true;
+      if(waitCtl&&waitCtl.node===n){
+        if(waitCtl.timer)clearInterval(waitCtl.timer);
+        waitCtl=null;
+      }
+    }
     const i=nodes.indexOf(n);
     if(i>-1)nodes.splice(i,1);
   });
@@ -484,6 +633,8 @@ function delSel(){
   sel.forEach(n=>{
     if(n._fileId&&!nodes.some(x=>x._fileId===n._fileId))fileDB.del(n._fileId);
   });
+  // 同步覆盖写备份后，孤儿文件已随最新 nodes 列表不再生成
+  if(syncHandle)trySync(false);
   edges=edges.filter(e=>!sel.includes(e.a)&&!sel.includes(e.b));
   if(selectedEdge&&!edges.includes(selectedEdge))selectedEdge=null;
   if(portDrag&&sel.includes(portDrag.node))portDrag=null;
@@ -719,7 +870,7 @@ function exportPNG(){
 }
 async function exportJSON(){
   saveProjects();
-  const data={nodes,edges:serializeEdges(),camX,camY,zoom};
+  const data={nodes:serializeNodes(nodes),edges:serializeEdges(),camX,camY,zoom};
   // 本地上传的文件只存了引用号，必须把本体一起打包，换设备才不丢内容
   const ids=[...new Set(nodes.filter(n=>n._fileId).map(n=>n._fileId))];
   if(ids.length){
@@ -751,7 +902,7 @@ function importJSON(){
   i.onchange=async e=>{
     const f=e.target.files[0];if(!f)return;
     const d=JSON.parse(await f.text());
-    nodes=d.nodes||[];
+    nodes=deserializeNodes(d.nodes||[]);
     edges=deserializeEdges(d.edges,nodes);
     selectedEdge=null;portDrag=null;
     camX=d.camX||0;camY=d.camY||0;zoom=d.zoom||1;
@@ -760,7 +911,6 @@ function importJSON(){
     toast('正在恢复文件内容…');
     // 把随项目打包进来的文件本体解码并写进本机 IndexedDB，之后按引用号取用
     await Promise.all(nodes.map(async n=>{
-      n.videoEl=null;n.videoSnap=null;n.audioEl=null;
       if(!n._fileId||!d.files||!d.files[n._fileId])return;
       try{
         const blob=await(await fetch(d.files[n._fileId])).blob();
@@ -812,6 +962,42 @@ function updateZoomText(){document.getElementById('zoomLabel').innerText=Math.ro
 let syncHandle=null;
 let syncing=false;
 let syncKickTimer=null;
+// 收集节点引用的 IndexedDB 文件，内嵌为 base64（同名 fid），让备份自带内容
+async function embedProjectFiles(proj){
+  const nodes=proj.nodes||[];
+  const ids=[...new Set(nodes.filter(n=>n&&n._fileId).map(n=>n._fileId))];
+  const files={};
+  let bytes=0,missing=0;
+  for(const fid of ids){
+    try{
+      const b=await fileDB.get(fid);
+      if(!b){missing++;continue;}
+      bytes+=b.size;
+      files[fid]=await blobToBase64(b);
+    }catch(e){missing++;}
+  }
+  return {files,bytes,need:ids.length,missing};
+}
+const SETTINGS=(()=>{
+  let s={autoSave:true,autoBackup:true,mode:'now',lastBackup:0};
+  try{Object.assign(s,JSON.parse(localStorage.getItem('pavo_settings')||'{}'));}catch(e){}
+  return s;
+})();
+let syncIntTimer=null;
+function applySettings(){
+  clearInterval(syncIntTimer);syncIntTimer=null;
+  const btn=document.getElementById('setBtn');
+  if(btn)btn.style.outline=SETTINGS.autoSave===false?'2px solid #ef4444':'';
+  if(SETTINGS.autoSave!==false&&SETTINGS.autoBackup!==false&&syncHandle&&(SETTINGS.mode==='30s'||SETTINGS.mode==='5m')){
+    syncIntTimer=setInterval(()=>{trySync(false);},SETTINGS.mode==='30s'?30000:300000);
+  }
+}
+function saveNowClick(){
+  doSaveProjects();
+  if(syncHandle&&SETTINGS.autoBackup!==false&&SETTINGS.mode!=='manual'){trySync(true);}
+  else if(syncHandle){toast('✅ 已保存，点 🔄 可立即备份到数据文件夹');}
+  else{toast('✅ 已保存到浏览器');}
+}
 const syncKV=(()=>{
   let dbp=null;
   function open(){
@@ -841,22 +1027,66 @@ async function ensureSyncPerm(silent){
     return null;
   }catch(e){return null;}
 }
-function syncFileName(proj,id){
-  const nm=proj.name||('项目_'+String(id).slice(-6));
-  return String(nm).replace(/[\\/:*?"<>|]/g,'_').slice(0,60)+'.json';
+function syncFileName(proj,id,allNames){
+  let nm=proj.name||('项目_'+String(id).slice(-6));
+  nm=String(nm).replace(/[\\/:*?"<>|]/g,'_').slice(0,60);
+  let fn=nm+'.json';
+  // 多个项目同名时，加 id 后缀防互相覆盖
+  if(allNames&&allNames.get(fn)&&allNames.get(fn)!==id)fn=nm+'_'+String(id).slice(-6)+'.json';
+  return fn;
 }
 async function writeAllToFolder(p){
   if(!syncHandle)return 0;
-  let n=0;
+  const allNames=new Map();
+  Object.keys(p).forEach(id=>{
+    const nm=p[id].name||('项目_'+String(id).slice(-6));
+    const base=String(nm).replace(/[\\/:*?"<>|]/g,'_').slice(0,60)+'.json';
+    if(!allNames.has(base))allNames.set(base,id);
+  });
+  let n=0,bigWarned=0,missTotal=0;
+  const HISTORY_DIR='_history';
+  const MAX_VERSIONS=20;
   for(const id of Object.keys(p)){
     const proj=p[id];
     try{
-      const fh=await syncHandle.getFileHandle(syncFileName(proj,id),{create:true});
+      const {files,bytes,missing}=await embedProjectFiles(proj);
+      missTotal+=missing||0;
+      if(bytes>60*1024*1024&&bigWarned<3){
+        bigWarned++;
+        toast('⚠ 「'+(proj.name||id)+'」上传素材约 '+Math.round(bytes/1048576)+'MB，备份文件会很大');
+      }
+      const fn=syncFileName(proj,id,allNames);
+      const data=JSON.stringify(Object.assign({projectId:id},proj,{_files:files}));
+      // 1. 写入主备份文件（当前版本）
+      const fh=await syncHandle.getFileHandle(fn,{create:true});
       const w=await fh.createWritable();
-      await w.write(JSON.stringify(Object.assign({projectId:id},proj)));
+      await w.write(data);
       await w.close();n++;
-    }catch(e){}
+      // 2. 写入历史版本（带时间戳）
+      try{
+        const histDir=await syncHandle.getDirectoryHandle(HISTORY_DIR,{create:true});
+        const baseName=fn.replace(/\.json$/i,'');
+        const ts=new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
+        const verFn=baseName+'_'+ts+'.json';
+        const vfh=await histDir.getFileHandle(verFn,{create:true});
+        const vw=await vfh.createWritable();
+        await vw.write(data);
+        await vw.close();
+        // 3. 清理旧版本：保留最近 MAX_VERSIONS 个
+        const versions=[];
+        for await(const entry of histDir.values()){
+          if(entry.kind==='file'&&entry.name.startsWith(baseName+'_')&&entry.name.endsWith('.json')){
+            versions.push(entry.name);
+          }
+        }
+        versions.sort().reverse();
+        for(let i=MAX_VERSIONS;i<versions.length;i++){
+          try{await histDir.removeEntry(versions[i]);}catch(_){}
+        }
+      }catch(he){console.warn('history write skipped',he);}
+    }catch(e){console.error('backup fail',id,e);}
   }
+  if(missTotal){toast('⚠ '+missTotal+' 个素材文件在本机库中缺失（可能属于其它设备浏览器），未能内嵌');}
   return n;
 }
 async function trySync(manual){
@@ -864,14 +1094,26 @@ async function trySync(manual){
   syncing=true;
   try{
     const p=loadProjects();
+    // 关键：把内存中的实时画面并入待备份数据——自动保存被关闭时，
+    // localStorage 里是旧版本，直接备份会丢刚才的编辑（卡片不全的根因之一）
+    if(currentProjectId&&Array.isArray(nodes)){
+      p[currentProjectId]=Object.assign({},p[currentProjectId]||{},{nodes:serializeNodes(nodes),edges:serializeEdges(),camX,camY,zoom,updated:Date.now()});
+    }
     const n=await writeAllToFolder(p);
-    if(manual)toast(n?('✅ 已保存 '+n+' 个项目到数据文件夹（同名覆盖）'):'保存失败：文件夹不可写');
+    if(n){SETTINGS.lastBackup=Date.now();try{localStorage.setItem('pavo_settings',JSON.stringify(SETTINGS));}catch(e){}}
+    if(manual){
+      const cur=p[currentProjectId];
+      const cn=cur&&cur.nodes?cur.nodes.length:0;
+      toast(n?('✅ 已备份 '+n+' 个项目 · 当前项目 '+cn+' 张卡片（含全部卡片数据，素材已内嵌）'):'保存失败：文件夹不可写');
+    }
   }catch(e){
     if(manual)toast('保存出错：'+e.message);
   }finally{syncing=false;}
 }
 function scheduleSync(){
   if(!syncHandle)return;
+  if(SETTINGS.autoBackup===false||SETTINGS.mode==='manual')return;
+  if(SETTINGS.mode!=='now')return; // 周期模式由定时器负责
   clearTimeout(syncKickTimer);
   syncKickTimer=setTimeout(()=>{trySync(false);},1500);
 }
@@ -880,11 +1122,30 @@ async function pickSyncFolder(){
     const h=await showDirectoryPicker({mode:'readwrite',id:'pavo-data'});
     syncHandle=h;
     await syncKV.set('dir',h);
+    applySettings();
+    const lab=document.getElementById('setPathName');
+    if(lab)lab.innerText='📂 '+h.name;
     toast('📁 已连接数据文件夹，此后每次操作自动备份');
     trySync(true);
   }catch(e){
     if(e&&e.name==='AbortError')return;
     toast('连接失败：'+(e&&e.message||e));
+  }
+}
+async function changeSyncFolder(){
+  if(!window.showDirectoryPicker){toast('当前浏览器不支持选择文件夹：请在电脑 Chrome/Edge 操作');return;}
+  try{
+    const h=await showDirectoryPicker({mode:'readwrite',id:'pavo-data'});
+    syncHandle=h;
+    await syncKV.set('dir',h);
+    applySettings();
+    const lab=document.getElementById('setPathName');
+    if(lab)lab.innerText=h.name;
+    toast('📁 保存路径已改为「'+h.name+'」');
+    trySync(true);
+  }catch(e){
+    if(e&&e.name==='AbortError')return;
+    toast('选择失败：'+(e&&e.message||e));
   }
 }
 function syncBtnClick(){
@@ -908,15 +1169,34 @@ async function scanFolderBackups(){
         const f=await entry.getFile();
         const d=JSON.parse(await f.text());
         if(!d||!Array.isArray(d.nodes))continue;
-        list.push({rec:d,file:f.name,size:f.size,mtime:f.lastModified});
+        list.push({rec:d,file:f.name,size:f.size,mtime:f.lastModified,nfiles:d._files?Object.keys(d._files).length:0});
       }catch(e){}
     }
   }catch(e){}
   return list;
 }
+// 备份里内嵌的 _files 写回本机 IndexedDB，恢复引用内容
+async function restoreEmbeddedFiles(rec){
+  if(!rec||!rec._files)return 0;
+  let n=0;
+  // 兼容两种格式：对象 {fid: dataURL} 或 数组 [{fid, data, name}]
+  const entries=Array.isArray(rec._files)
+    ? rec._files.map(f=>[f.fid,f.data])
+    : Object.entries(rec._files);
+  for(const [fid,fdata] of entries){
+    if(!fid||!fdata)continue;
+    try{
+      const blob=await(await fetch(fdata)).blob();
+      if(blob&&blob.size>0){await fileDB.put(fid,blob);n++;}
+    }catch(e){console.error('restoreEmbeddedFiles fail',fid,e);}
+  }
+  return n;
+}
 async function recoverApply(rec,mode){
   const p=loadProjects();
   const name=rec.name||rec.recName||'恢复的项目';
+  const emb=await restoreEmbeddedFiles(rec);
+  if(emb)toast('已还原 '+emb+' 个内嵌素材文件');
   const data={nodes:rec.nodes||[],edges:rec.edges||[],camX:rec.camX||0,camY:rec.camY||0,zoom:rec.zoom||1,name,updated:Date.now()};
   let msg='';
   let loadId=null;
@@ -934,7 +1214,9 @@ async function recoverApply(rec,mode){
   refreshTopBar();
   scheduleSync();
   loadProject(loadId);
-  toast('✅ '+msg);
+  const nc=(rec.nodes||[]).length;
+  const ec=(rec.edges||[]).length;
+  toast('✅ '+msg+'（'+nc+' 张卡片 · '+ec+' 条连线'+(emb?' · '+emb+' 个素材':'')+'）');
 }
 function fmtTime(t){try{return new Date(t).toLocaleString();}catch(e){return '';}}
 async function renderRecoverBody(){
@@ -960,7 +1242,7 @@ async function renderRecoverBody(){
     return '<div style="display:flex;align-items:center;gap:8px;padding:7px 4px;border-bottom:1px solid #22283b">'+
       '<div style="flex:1;min-width:0">'+
       '<div style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">📄 '+nm+' '+dup+'</div>'+
-      '<div style="font-size:11px;color:#8892ab">'+(r.rec.nodes||[]).length+' 个节点 · '+fmtTime(r.mtime)+'</div></div>'+
+      '<div style="font-size:11px;color:#8892ab">'+(r.rec.nodes||[]).length+' 个节点 · 内嵌素材 '+(r.nfiles||0)+' 个'+(r.nfiles?'':'⚠')+' · '+fmtTime(r.mtime)+'</div></div>'+
       '<button class="btn-secondary" style="font-size:12px;padding:5px 8px" onclick="recoverPick('+i+',\'new\')">恢复为新项目</button>'+
       '<button class="btn-secondary" style="font-size:12px;padding:5px 8px" onclick="recoverPick('+i+',\'current\')">覆盖当前</button>'+
       '</div>';
@@ -983,6 +1265,7 @@ async function recoverFileInput(ev){
     try{
       const d=JSON.parse(await f.text());
       if(!d||!Array.isArray(d.nodes)){toast('跳过 '+f.name+'：不是画布备份');continue;}
+      await restoreEmbeddedFiles(d);
       const fid=String(d.name||f.name.replace(/\.json$/i,'')).replace(/[\\/:*?"<>|]/g,'_').slice(0,60)+'.json';
       if(d.projectId&&p[d.projectId]){
         p[d.projectId]={nodes:d.nodes,edges:d.edges||[],camX:d.camX||0,camY:d.camY||0,zoom:d.zoom||1,name:d.name||p[d.projectId].name,updated:Date.now()};
@@ -1009,6 +1292,81 @@ async function recoverFileInput(ev){
   }
   document.getElementById('recoverModal').style.display='none';
 }
+function openSettings(){
+  document.getElementById('setAutoSave').checked=SETTINGS.autoSave!==false;
+  document.getElementById('setAutoBackup').checked=SETTINGS.autoBackup!==false;
+  document.getElementById('setMode').value=SETTINGS.mode||'now';
+  (async()=>{
+    const lab=document.getElementById('setPathName');
+    if(!lab)return;
+    let nm=syncHandle?syncHandle.name:'';
+    if(!nm){const h=await syncKV.get('dir');nm=h&&h.name?h.name:'';}
+    lab.innerText=nm?('📂 '+nm):'未选择（点右侧按钮选文件夹）';
+  })();
+  document.getElementById('setLastTime').innerText=SETTINGS.lastBackup?('上次备份：'+fmtTime(SETTINGS.lastBackup)+(syncHandle?'':'（当前浏览器未连接数据文件夹）')):'尚未备份过';
+  renderSleepList();
+  document.getElementById('setModal').style.display='flex';
+}
+function renderSleepList(){
+  const q=loadSleepQueue();
+  const badge=document.getElementById('sleepBadge');
+  const list=document.getElementById('sleepList');
+  if(badge)badge.innerText=q.length?(q.length+' 个待重试'):'';
+  if(!list)return;
+  if(!q.length){list.innerText='暂无休眠任务';return;}
+  let html='';
+  for(const item of q){
+    const t=new Date(item.createdAt);
+    const next=new Date(item.nextTryAt);
+    const promptPreview=(item.prompt||'').slice(0,30);
+    const icon=item.type==='image'?'🖼':'🎬';
+    const label=item.type==='image'?'图片生成':'视频生成';
+    html+='<div style="padding:6px 8px;background:#14161f;border-radius:6px;margin-bottom:4px">';
+    html+='<div style="display:flex;justify-content:space-between;align-items:center">';
+    html+='<span style="color:#cdd5e1">'+icon+' '+(promptPreview||label)+'…</span>';
+    html+='<span style="font-size:11px;color:#a78bfa">失败'+(item.failCount||8)+'次</span>';
+    html+='</div>';
+    html+='<div style="font-size:11px;color:#6b7488;margin-top:2px">加入：'+t.toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})+' · 下次：'+(next>Date.now()?next.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}):'立即');
+    html+='</div></div>';
+  }
+  list.innerHTML=html;
+}
+function manualRetrySleep(){
+  const q=loadSleepQueue();
+  if(!q.length){toast('休眠队列为空');return;}
+  const item=q[0];
+  removeFromSleepQueue(item.id);
+  renderSleepList();
+  // 重新提交
+  pendingTarget=item.targetId?nodes.find(n=>n.id===item.targetId):null;
+  if(item.type==='image'){
+    const ctl=beginWait('🖼 生成图片（手动重试）',pendingTarget||null,'image');
+    if(!ctl){addToSleepQueue(item);renderSleepList();return;}
+    doSubmitImage(item.payload,item.ratio||'16:9',item);
+  }else{
+    const ctl=beginWait('🎬 生成视频（手动重试）',pendingTarget||null,'video');
+    if(!ctl){addToSleepQueue(item);renderSleepList();return;}
+    doSubmitVideo(item.payload,ctl,0,item);
+  }
+}
+function clearSleepQueue(){
+  if(!confirm('确定清空所有休眠中的生成任务？'))return;
+  saveSleepQueue([]);
+  renderSleepList();
+  updateSleepBadge();
+  toast('已清空休眠队列');
+}
+function closeSettings(){document.getElementById('setModal').style.display='none';}
+function saveSettings(){
+  SETTINGS.autoSave=document.getElementById('setAutoSave').checked;
+  SETTINGS.autoBackup=document.getElementById('setAutoBackup').checked;
+  SETTINGS.mode=document.getElementById('setMode').value;
+  try{localStorage.setItem('pavo_settings',JSON.stringify(SETTINGS));}catch(e){}
+  applySettings();
+  closeSettings();
+  if(!SETTINGS.autoSave)toast('⚠ 自动保存已关闭：现在改动只在内存，记得随时点"立即保存"');
+  else toast('✅ 设置已保存（备份频率：'+document.getElementById('setMode').selectedOptions[0].text+'）');
+}
 function openRecoverModal(){
   document.getElementById('recoverModal').style.display='flex';
   renderRecoverBody();
@@ -1019,6 +1377,122 @@ function closeRecoverModal(){
 // 点弹窗外的遮罩空白处即关闭，避免挡住顶栏导致无法双击重命名
 document.getElementById('recoverModal').addEventListener('click',e=>{
   if(e.target.id==='recoverModal')closeRecoverModal();
+});
+// ---- 历史版本恢复 ----
+async function showHistoryModal(){
+  if(!syncHandle){toast('请先连接数据文件夹（设置 → 自动备份）');return;}
+  const m=document.getElementById('historyModal');
+  const body=document.getElementById('histBody');
+  const projInfo=document.getElementById('histProject');
+  m.style.display='flex';
+  body.innerHTML='';
+  try{
+    const histDir=await syncHandle.getDirectoryHandle('_history',{create:false});
+    // 收集所有项目的所有版本
+    const projectMap=new Map();
+    for await(const entry of histDir.values()){
+      if(entry.kind!=='file'||!entry.name.endsWith('.json'))continue;
+      const m2=entry.name.match(/^(.+)_(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})\.json$/i);
+      if(!m2)continue;
+      const baseName=m2[1];
+      const tsStr=m2[2].replace(/-/g,':').replace('T',' ');
+      if(!projectMap.has(baseName))projectMap.set(baseName,[]);
+      projectMap.get(baseName).push({name:entry.name,time:tsStr,file:entry});
+    }
+    if(projectMap.size===0){
+      projInfo.textContent='暂无历史版本（需要先有自动备份才会生成历史记录）';
+      return;
+    }
+    const projects=[...projectMap.keys()].sort();
+    for(const pName of projects){
+      const versions=projectMap.get(pName).sort((a,b)=>b.time.localeCompare(a.time));
+      const wrap=document.createElement('div');
+      wrap.style.cssText='margin-bottom:8px;border:1px solid #334155;border-radius:8px;overflow:hidden';
+      const header=document.createElement('div');
+      header.style.cssText='padding:8px 12px;background:#1e293b;cursor:pointer;font-weight:500';
+      header.textContent='📁 '+pName;
+      const cnt=document.createElement('span');
+      cnt.style.cssText='color:#64748b;font-weight:normal;font-size:12px';
+      cnt.textContent=' （'+versions.length+' 个版本）';
+      header.appendChild(cnt);
+      const list=document.createElement('div');
+      list.style.display='none';
+      header.onclick=()=>{list.style.display=list.style.display==='none'?'block':'none';};
+      for(const v of versions){
+        const row=document.createElement('div');
+        row.style.cssText='padding:8px 12px;border-top:1px solid #334155;display:flex;justify-content:space-between;align-items:center;gap:8px';
+        const timeDiv=document.createElement('div');
+        timeDiv.style.fontSize='13px';
+        timeDiv.textContent='🕐 '+v.time;
+        const btn=document.createElement('button');
+        btn.className='btn-primary';
+        btn.style.cssText='padding:4px 10px;font-size:12px;flex:0 0 auto';
+        btn.textContent='回滚到此版本';
+        btn.onclick=()=>restoreHistoryVersion(v.name,pName,v.time);
+        row.appendChild(timeDiv);
+        row.appendChild(btn);
+        list.appendChild(row);
+      }
+      wrap.appendChild(header);
+      wrap.appendChild(list);
+      body.appendChild(wrap);
+    }
+    projInfo.textContent=projects.length+' 个项目有历史版本，点击展开查看';
+  }catch(e){
+    if(e&&e.name==='NotFoundError'){
+      projInfo.textContent='暂无历史版本（需要先有自动备份才会生成历史记录）';
+    }else{
+      projInfo.textContent='读取失败：'+(e.message||e);
+    }
+  }
+}
+function closeHistoryModal(){
+  document.getElementById('historyModal').style.display='none';
+}
+async function restoreHistoryVersion(fileName,projName,timeStr){
+  if(!confirm('确定回滚「'+projName+'」到 '+timeStr+' 的版本吗？\n\n⚠ 当前内容将被覆盖，建议先导出一份当前备份。'))return;
+  try{
+    const histDir=await syncHandle.getDirectoryHandle('_history',{create:false});
+    const fh=await histDir.getFileHandle(fileName);
+    const file=await fh.getFile();
+    const text=await file.text();
+    const rec=JSON.parse(text);
+    // 直接使用 recoverApply 的逻辑恢复
+    const projId=rec.projectId||('p_'+Date.now());
+    const emb=rec._files;
+    let embCount=0;
+    if(emb){
+      // 兼容两种格式：对象 {fid: dataURL} 或 数组 [{fid, data, name}]
+      const entries=Array.isArray(emb)?emb.map(f=>[f.fid,f.data]):Object.entries(emb);
+      for(const [fid,fdata] of entries){
+        if(!fid||!fdata)continue;
+        try{
+          const blob=await (await fetch(fdata)).blob();
+          if(blob&&blob.size>0){await fileDB.put(fid,blob);embCount++;}
+        }catch(_){}
+      }
+    }
+    const p=loadProjects();
+    const isNew=!p[projId];
+    p[projId]=Object.assign({},rec,{projectId:undefined,_files:undefined,name:rec.name||projName});
+    localStorage.setItem('pavo_projects',JSON.stringify(p));
+    refreshTopBar();
+    scheduleSync();
+    loadProject(projId);
+    const nc=(rec.nodes||[]).length;
+    const ec=(rec.edges||[]).length;
+    toast('✅ 已回滚到 '+timeStr+'（'+nc+' 张卡片 · '+ec+' 条连线'+(embCount?' · '+embCount+' 个素材':'')+'）');
+    closeHistoryModal();
+    closeRecoverModal();
+  }catch(e){
+    toast('回滚失败：'+(e.message||e));
+  }
+}
+document.getElementById('historyModal').addEventListener('click',e=>{
+  if(e.target.id==='historyModal')closeHistoryModal();
+});
+document.getElementById('setModal').addEventListener('click',e=>{
+  if(e.target.id==='setModal')closeSettings();
 });
 
 // ---- 本地文件仓库（IndexedDB）：上传的原始文件永久存在浏览器库里 ----
@@ -1094,6 +1568,24 @@ async function rehydrateFile(n){
     n._objectUrl=url;
     n.videoEl=null;
     ensureVideoEl(n);
+    // 视频元数据加载后触发重绘，让缩略图及时显示
+    if(n.videoEl){
+      const onReady=()=>{draw();n.videoEl.removeEventListener('loadeddata',onReady);};
+      n.videoEl.addEventListener('loadeddata',onReady);
+    }
+  }else if(n.type==='img'){
+    // 图片恢复后清除旧缓存并触发重绘
+    delete imgCache[url];
+    const im=new Image();
+    im.onload=()=>{
+      if(!n._fitted){fitNodeByAspect(n,im.naturalWidth,im.naturalHeight);n._fitted=true;}
+      draw();
+    };
+    im.src=url;
+    imgCache[url]=im;
+  }else{
+    // 其他类型（音频、文档等）也触发一次重绘
+    draw();
   }
 }
 // 双击文档节点 = 下载原文件 / 新标签打开
@@ -1444,56 +1936,14 @@ async function runAI(){
     const payload={model:'agnes-image-2.5-flash',prompt:fullPrompt,size:size};
     if(!isNaN(seed)&&seed>=0)payload.seed=seed;
     if(refImg)payload.image=refImg;
-    const ctl=beginWait('图片生成中');
+    const ctl=beginWait('图片生成中',pendingTarget||null,'image');
     if(!ctl){toast('已有任务在生成中，请等它完成或先取消');return;}
-    if(refImg)waitMsg('✅ 图生图模式：参考来自'+refSrc+'（约 '+Math.round(refImg.length/1024)+'KB）');
-    else waitMsg('⚠ 本次无画面参考，为纯文字生图（可上传附件或在连线清单勾选画面）');
+    if(refImg)waitMsg('图生图：'+refSrc+' '+Math.round(refImg.length/1024)+'KB');
+    else waitMsg('纯文字生图');
     if(linkedRef)showRaw('【连线参考诊断】\n'+linkedRef.diag.join('\n')+'\n\n请求体实际字段：'+(payload.image?'image=已附带参考画面':'image=无')+'，提示词共 '+fullPrompt.length+' 字符');
     closeAIModal();
-    try{
-      const res=await fetch(API_BASE+'/images/generations',{
-        method:'POST',
-        headers:{'Authorization':'Bearer '+API_KEY,'Content-Type':'application/json'},
-        body:JSON.stringify(payload)
-      });
-      const data=await res.json();
-      if(!waitCtl||waitCtl.cancelled){refImageBlob=null;return;}
-      const url=extractResult(data,'image');
-      if(!url){
-        endWait();
-        showRaw(JSON.stringify(data).slice(0,2000));
-        alert('图片生成失败（HTTP '+(res?res.status:'?')+'），接口原始返回：\n'+JSON.stringify(data).slice(0,500));
-        refImageBlob=null;
-        return;
-      }
-      const c=getViewCenterPos();
-      const ar=ratio==='9:16'?0.5625:(ratio==='1:1'?1:1.7778);
-      const tgt=pendingTarget&&nodes.includes(pendingTarget)?pendingTarget:null;
-      pendingTarget=null;
-      if(tgt){
-        destroyVideo(tgt);
-        tgt.type='img';tgt.isVideo=false;
-        tgt.text='';tgt.src=url;tgt.videoSnap=null;
-        tgt._fitted=false;
-        if(!tgt.title)tgt.title='AI生成图片';
-        setSelection([tgt]);
-      }else{
-        const n={
-          x:c.x-90,y:c.y-70,w:180,h:Math.round(180/ar),
-          title:'AI生成图片',type:'img',isVideo:false,src:url
-        };
-        nodes.push(n);
-        setSelection([n]);
-      }
-      saveProjects();
-      draw();
-      endWait();
-      toast(tgt?'✅ 图片已生成，写回该卡片':'✅ 图片已生成，加入画布');
-    }catch(e){
-      if(waitCtl)endWait();
-      alert('网络请求失败：'+e.message+'\n请检查网络后重试');
-    }
     refImageBlob=null;
+    doSubmitImage(payload,ratio,{prompt:prompt});
     return;
   }
   const dur=document.getElementById("aiDuration").value;
@@ -1528,19 +1978,258 @@ async function runAI(){
   };
   if(videoMode==="keyframe")payload.image=refImageB64;
   if(videoMode==="reference")payload.video=refVideoB64;
-  const ctl=beginWait('视频生成排队中');
-  if(!ctl){toast('已有任务在排队，请等它完成或先取消');return;}
+  const ctl=beginWait('视频生成排队中',pendingTarget||null,'video');
+  if(!ctl){toast('已有任务在生成中，请等它完成或先取消');return;}
   if(linkedRef){
     const d=linkedRef.diag.join('\n');
-    waitMsg(linkedRef.imgs.length?('✅ 已自动带入 '+linkedRef.imgs.length+' 个连线画面作为'+(linkedRef.imgs.length>1?'首尾帧':'参考图')+(linkedRef.texts.length?'，并注入 '+linkedRef.texts.length+' 段剧本文字':'')):(linkedRef.texts.length?('✅ 已注入 '+linkedRef.texts.length+' 段连线剧本文字（无画面参考）'):'⚠ 未带上任何连线参考，原因见下方原始返回'));
+    waitMsg(linkedRef.imgs.length?('带入 '+linkedRef.imgs.length+' 张参考图'):(linkedRef.texts.length?('注入 '+linkedRef.texts.length+' 段文字'):'无参考'));
     showRaw('【连线参考诊断】\n'+d+'\n\n实际请求体字段：mode='+videoMode+(refImageB64?('，image='+String(JSON.stringify(refImageB64).slice(0,60))+'…'):'，无画面参考')+(fullPrompt.length!==prompt.length?('，提示词含注入文字(共'+fullPrompt.length+'字符)'):'，提示词未注入'));
   }
-  const RETRY_WAIT=20000;
-  let pollDelay=5000; // 查询节奏：正常5秒，被限流(429)指数退避到最长30秒
-  const pollBase=API_BASE.replace('/v1','');
   // 参考素材已转成 base64 写进 payload，原引用可释放
   refImageBlob=null;refVideoBlob=null;refTextExtra=null;
+  // 调用通用提交+轮询函数
+  doSubmitVideo(payload,ctl,0,{prompt:prompt,videoMode:videoMode,ratio:ratio});
+  closeAIModal();
+}
 
+// ---- 视频生成休眠队列：队列满时指数退避，3次失败后入队凌晨重试 ----
+const SLEEP_KEY='pavo_video_sleep_queue';
+function loadSleepQueue(){
+  try{return JSON.parse(localStorage.getItem(SLEEP_KEY)||'[]');}catch(e){return [];}
+}
+function saveSleepQueue(q){
+  try{localStorage.setItem(SLEEP_KEY,JSON.stringify(q));}catch(e){}
+}
+function addToSleepQueue(item){
+  const q=loadSleepQueue();
+  q.push(item);
+  saveSleepQueue(q);
+  updateSleepBadge();
+}
+function removeFromSleepQueue(id){
+  const q=loadSleepQueue().filter(x=>x.id!==id);
+  saveSleepQueue(q);
+  updateSleepBadge();
+}
+function isOffPeakNow(){
+  const h=new Date().getHours();
+  return h>=1&&h<6; // 凌晨1-6点为低峰
+}
+function nextOffPeakTime(){
+  const now=new Date();
+  const t=new Date(now);
+  if(now.getHours()<1){t.setHours(1,0,0,0);}
+  else{t.setDate(t.getDate()+1);t.setHours(1,0,0,0);}
+  return t.getTime();
+}
+let sleepTimer=null;
+function scheduleSleepRetry(){
+  if(sleepTimer){clearTimeout(sleepTimer);sleepTimer=null;}
+  const q=loadSleepQueue();
+  if(!q.length)return;
+  const now=Date.now();
+  // 如果现在是低峰，立即逐个重试
+  if(isOffPeakNow()){
+    processSleepQueue();
+    return;
+  }
+  // 否则等到下一个凌晨1点
+  const waitMs=nextOffPeakTime()-now;
+  sleepTimer=setTimeout(()=>{processSleepQueue();},Math.min(waitMs,2147483000));
+}
+async function processSleepQueue(){
+  const q=loadSleepQueue();
+  if(!q.length)return;
+  // 如果当前已经有任务在跑，等它结束再说
+  if(waitCtl&&!waitCtl.cancelled){
+    setTimeout(processSleepQueue,5000);
+    return;
+  }
+  // 逐个重试，每次只处理一个
+  const item=q[0];
+  removeFromSleepQueue(item.id);
+  renderSleepList();
+  if(item.type==='video'){
+    pendingTarget=item.targetId?nodes.find(n=>n.id===item.targetId):null;
+    const ctl=beginWait('🎬 生成视频（凌晨低峰重试）',pendingTarget||null,'video');
+    if(ctl){
+      doSubmitVideo(item.payload,ctl,0,item);
+      // 等当前任务结束后再安排下一个
+      const checkDone=setInterval(()=>{
+        if(!waitCtl){
+          clearInterval(checkDone);
+          scheduleSleepRetry();
+        }
+      },2000);
+    }else{
+      // 被取消了，重新入队
+      const nq=loadSleepQueue();
+      nq.unshift(item);
+      saveSleepQueue(nq);
+      renderSleepList();
+      scheduleSleepRetry();
+    }
+  }else if(item.type==='image'){
+    pendingTarget=item.targetId?nodes.find(n=>n.id===item.targetId):null;
+    const ctl=beginWait('🖼 生成图片（凌晨低峰重试）',pendingTarget||null,'image');
+    if(ctl){
+      doSubmitImage(item.payload,item.ratio||'16:9',item);
+      // 等当前任务结束后再安排下一个
+      const checkDone=setInterval(()=>{
+        if(!waitCtl){
+          clearInterval(checkDone);
+          scheduleSleepRetry();
+        }
+      },2000);
+    }else{
+      const nq=loadSleepQueue();
+      nq.unshift(item);
+      saveSleepQueue(nq);
+      renderSleepList();
+      scheduleSleepRetry();
+    }
+  }
+}
+// 从休眠项恢复生成
+async function generateVideoFromItem(item){
+  // 重建参数并调用
+  const payload=item.payload;
+  pendingTarget=item.targetId?nodes.find(n=>n.id===item.targetId):null;
+  // 直接调用内部提交逻辑
+  const ctl=beginWait('🎬 生成视频（凌晨低峰重试）',pendingTarget||null,'video');
+  if(!ctl)return;
+  doSubmitVideo(payload,ctl,0,item);
+}
+// 视频提交的指数退避
+const QUEUE_BACKOFF=[3*60*1000,6*60*1000,12*60*1000]; // 3min, 6min, 12min
+function getBackoffMs(queueFailCount){
+  return QUEUE_BACKOFF[Math.min(queueFailCount,QUEUE_BACKOFF.length-1)];
+}
+function updateSleepBadge(){
+  const q=loadSleepQueue();
+  // 在设置面板或其他地方显示休眠队列数量
+  const badge=document.getElementById('sleepBadge');
+  if(badge)badge.innerText=q.length?('🕐 休眠队列：'+q.length+' 个'):'';
+}
+// 通用图片提交+重试函数（同步返回，无轮询）
+function doSubmitImage(payload,ratio,item){
+  const RETRY_WAIT=15000;
+  let queueFailCount=0;
+  function later(fn,ms){
+    if(!waitCtl||waitCtl.cancelled)return;
+    setTimeout(()=>{if(waitCtl&&!waitCtl.cancelled)fn();},ms);
+  }
+  async function submit(){
+    if(!waitCtl||waitCtl.cancelled)return;
+    let res=null,data=null,nerr=null;
+    try{
+      res=await fetch(API_BASE+'/images/generations',{
+        method:'POST',
+        headers:{'Authorization':'Bearer '+API_KEY,'Content-Type':'application/json'},
+        body:JSON.stringify(payload)
+      });
+      data=await res.json();
+    }catch(e){nerr=e;}
+    if(!waitCtl||waitCtl.cancelled)return;
+    if(res&&res.ok){
+      const url=extractResult(data,'image');
+      if(url){
+        queueFailCount=0;
+        onSuccess(url);
+        return;
+      }
+      showRaw(JSON.stringify(data||{}).slice(0,2000));
+      waitMsg('返回中无图片地址，重试中…');
+      waitCtl.tries++;
+      later(submit,RETRY_WAIT);
+      return;
+    }
+    waitCtl.tries++;
+    showRaw(JSON.stringify(data||{}).slice(0,2000));
+    // 8次失败后加入休眠队列
+    if(waitCtl.tries>=8){
+      const sleepItem={
+        id:'sleep_'+Date.now(),
+        type:'image',
+        payload:payload,
+        targetId:pendingTarget?pendingTarget.id:null,
+        prompt:item?item.prompt:'',
+        ratio:ratio,
+        failCount:waitCtl.tries,
+        createdAt:Date.now(),
+        nextTryAt:nextOffPeakTime()
+      };
+      addToSleepQueue(sleepItem);
+      endWait();
+      const mins=Math.round((nextOffPeakTime()-Date.now())/60000);
+      toast('🕐 图片生成重试8次未成功，已加入休眠队列，约 '+mins+' 分钟后自动重试（设置中可查看/手动触发）');
+      scheduleSleepRetry();
+      return;
+    }
+    const isQueueFull=data&&(data.code==='image_queue_full'||data.code==='video_queue_full');
+    if(isQueueFull){
+      queueFailCount++;
+      let backoffMs;
+      if(queueFailCount===1)backoffMs=3*60*1000;
+      else if(queueFailCount===2)backoffMs=6*60*1000;
+      else if(queueFailCount===3)backoffMs=12*60*1000;
+      else backoffMs=15*60*1000;
+      const mins=(backoffMs/60000).toFixed(0);
+      waitMsg('队列已满（第 '+queueFailCount+' 次），'+mins+' 分钟后再试…');
+      later(submit,backoffMs);
+    }else if(nerr){
+      waitMsg('网络异常，持续重试中…');
+      later(submit,RETRY_WAIT);
+    }else{
+      waitMsg('暂未成功（HTTP '+(res?res.status:'?')+'），持续重试…');
+      later(submit,RETRY_WAIT);
+    }
+  }
+  async function onSuccess(url){
+    const ar=ratio==='9:16'?0.5625:(ratio==='1:1'?1:1.7778);
+    const tgt=pendingTarget&&nodes.includes(pendingTarget)?pendingTarget:null;
+    pendingTarget=null;
+    // 下载图片到本地 IndexedDB
+    let localSrc=url,localFid=null;
+    try{
+      const blob=await fetch(url).then(r=>r.blob());
+      if(blob&&blob.size>0){
+        localFid='ai_'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
+        await fileDB.put(localFid,blob);
+        localSrc=URL.createObjectURL(blob);
+      }
+    }catch(e){console.warn('AI图片本地保存失败，使用远程地址',e);}
+    if(tgt){
+      destroyVideo(tgt);
+      tgt.type='img';tgt.isVideo=false;
+      tgt.text='';tgt.src=localSrc;tgt.videoSnap=null;
+      if(localFid)tgt._fileId=localFid;
+      tgt._fitted=false;
+      if(!tgt.title)tgt.title='AI生成图片';
+      setSelection([tgt]);
+    }else{
+      const c=getViewCenterPos();
+      const n={
+        x:c.x-90,y:c.y-70,w:180,h:Math.round(180/ar),
+        title:'AI生成图片',type:'img',isVideo:false,src:localSrc
+      };
+      if(localFid)n._fileId=localFid;
+      nodes.push(n);
+      setSelection([n]);
+    }
+    saveProjects();
+    draw();
+    endWait();
+    toast(tgt?'✅ 图片已生成，写回该卡片':'✅ 图片已生成，加入画布');
+  }
+  submit();
+}
+// 通用视频提交+轮询函数，供 runAI 和休眠队列重试共用
+function doSubmitVideo(payload,ctl,initialQueueFails,item){
+  const RETRY_WAIT=20000;
+  let pollDelay=5000;
+  let queueFailCount=initialQueueFails||0;
+  const pollBase=API_BASE.replace('/v1','');
   function later(fn,ms){
     if(!waitCtl||waitCtl.cancelled)return;
     setTimeout(()=>{if(waitCtl&&!waitCtl.cancelled)fn();},ms);
@@ -1559,7 +2248,7 @@ async function runAI(){
     if(!waitCtl||waitCtl.cancelled)return;
     if(res&&res.ok){
       const vid=data&&(data.video_id||data.id||data.task_id||(data.data&&(data.data.video_id||data.data.id||data.data.task_id)));
-      if(vid){poll(vid);return;}
+      if(vid){queueFailCount=0;poll(vid);return;}
       showRaw(JSON.stringify(data||{}).slice(0,2000));
       endWait();
       alert('提交成功但没拿到任务号，接口原始返回：\n'+JSON.stringify(data||{}).slice(0,700));
@@ -1568,10 +2257,46 @@ async function runAI(){
     waitCtl.tries++;
     waitSubTick();
     showRaw(JSON.stringify(data||{}).slice(0,2000));
-    if(nerr){waitMsg('网络异常，持续重试中…');}
-    else if(data&&data.code==='video_queue_full'){waitMsg('使用的人太多，队列已满，排队重试中…');}
-    else{waitMsg('暂未提交成功（HTTP '+(res?res.status:'?')+'）：'+JSON.stringify(data||{}).slice(0,90)+'，持续重试…');}
-    later(submitTask,RETRY_WAIT);
+    // 8次失败后加入休眠队列
+    if(waitCtl.tries>=8){
+      const sleepItem={
+        id:'sleep_'+Date.now(),
+        type:'video',
+        payload:payload,
+        targetId:pendingTarget?pendingTarget.id:null,
+        prompt:item?item.prompt:'',
+        videoMode:item?item.videoMode:'text',
+        ratio:item?item.ratio:'16:9',
+        failCount:waitCtl.tries,
+        createdAt:Date.now(),
+        nextTryAt:nextOffPeakTime()
+      };
+      addToSleepQueue(sleepItem);
+      endWait();
+      const mins=Math.round((nextOffPeakTime()-Date.now())/60000);
+      toast('🕐 视频生成重试8次未成功，已加入休眠队列，约 '+mins+' 分钟后自动重试（设置中可查看/手动触发）');
+      scheduleSleepRetry();
+      return;
+    }
+    const isQueueFull=data&&data.code==='video_queue_full';
+    if(isQueueFull){
+      queueFailCount++;
+      // 3→6→12→15分钟，第4次起固定15分钟一直重试
+      let backoffMs;
+      if(queueFailCount===1)backoffMs=3*60*1000;
+      else if(queueFailCount===2)backoffMs=6*60*1000;
+      else if(queueFailCount===3)backoffMs=12*60*1000;
+      else backoffMs=15*60*1000;
+      const mins=(backoffMs/60000).toFixed(0);
+      waitMsg('队列已满（第 '+queueFailCount+' 次），'+mins+' 分钟后再试…');
+      later(submitTask,backoffMs);
+    }else if(nerr){
+      waitMsg('网络异常，持续重试中…');
+      later(submitTask,RETRY_WAIT);
+    }else{
+      waitMsg('暂未提交成功（HTTP '+(res?res.status:'?')+'）：'+JSON.stringify(data||{}).slice(0,90)+'，持续重试…');
+      later(submitTask,RETRY_WAIT);
+    }
   }
   async function poll(vid){
     if(!waitCtl||waitCtl.cancelled)return;
@@ -1591,7 +2316,7 @@ async function runAI(){
       later(()=>poll(vid),pollDelay);
       return;
     }
-    if(pollDelay!==5000){pollDelay=5000;} // 查询恢复正常节奏
+    if(pollDelay!==5000){pollDelay=5000;}
     const st=String(pd.status||pd.state||pd.task_status||'').toLowerCase();
     const done=(st==='completed'||st==='success'||st==='succeeded'||st==='finished'||st==='done'||st.includes('complete')||st.includes('success'));
     const bad=(st==='failed'||st==='error'||st.includes('fail')||st.includes('cancel'));
@@ -1606,20 +2331,30 @@ async function runAI(){
       const c=getViewCenterPos();
       const tgt=pendingTarget&&nodes.includes(pendingTarget)?pendingTarget:null;
       pendingTarget=null;
+      let localSrc=url,localFid=null;
+      try{
+        const blob=await fetch(url).then(r=>r.blob());
+        if(blob&&blob.size>0){
+          localFid='ai_'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
+          await fileDB.put(localFid,blob);
+          localSrc=URL.createObjectURL(blob);
+        }
+      }catch(e){console.warn('AI视频本地保存失败，使用远程地址',e);}
       const n=tgt||{
         x:c.x-90,y:c.y-70,w:180,h:140,
         title:"AI生成视频",type:"video",isVideo:true,
-        _objectUrl:null,videoEl:null,videoSnap:null,videoPlaying:false,src:url
+        _objectUrl:null,videoEl:null,videoSnap:null,videoPlaying:false,src:localSrc
       };
       if(tgt){
         destroyVideo(tgt);
         tgt.type='video';tgt.isVideo=true;
-        tgt.text='';tgt.src=url;tgt.videoSnap=null;tgt._fitted=false;
+        tgt.text='';tgt.src=localSrc;tgt.videoSnap=null;tgt._fitted=false;
         if(!tgt.title)tgt.title='AI生成视频';
       }
-      n._objectUrl=url;
+      if(localFid)n._fileId=localFid;
+      n._objectUrl=localSrc;
       const v=document.createElement('video');
-      v.src=url;
+      v.src=localSrc;
       attachVideo(n,v);
       if(!tgt)nodes.push(n);
       setSelection([n]);
@@ -1638,7 +2373,6 @@ async function runAI(){
     }
   }
   submitTask();
-  closeAIModal();
 }
 
 // ---- 生成排队等待遮罩：无限重试直到出片 ----
@@ -1647,39 +2381,59 @@ function fmtMs(ms){
   const s=Math.floor(ms/1000);
   return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');
 }
-function beginWait(title){
-  if(waitCtl&&!waitCtl.cancelled)return null;
-  const ctl={cancelled:false,t0:Date.now(),tries:0,timer:null};
+function beginWait(title,node,kind){
+  if(waitCtl&&!waitCtl.cancelled)return null; // 已有任务在跑
+  // 如果没有目标卡片，创建一个占位卡片放在画布中心
+  if(!node){
+    const c=getViewCenterPos();
+    node={
+      x:c.x-90,y:c.y-70,w:180,h:140,
+      title:kind==='image'?'AI生成图片':'AI生成视频',
+      type:kind==='image'?'img':'video',
+      isVideo:kind==='video',
+      src:null,_objectUrl:null,videoEl:null,videoSnap:null
+    };
+    nodes.push(node);
+    setSelection([node]);
+    pendingTarget=node; // 设为目标，生成完成后直接写回
+  }
+  if(node._genState)return null; // 已经在生成中
+  const ctl={cancelled:false,t0:Date.now(),tries:0,timer:null,node:node};
+  node._genState={msg:'正在提交任务…',t0:ctl.t0,tries:0,kind:kind||'video',ctl:ctl,raw:''};
   waitCtl=ctl;
-  const mask=document.getElementById('waitMask');
-  mask.querySelector('.wait-title').innerText=title;
-  mask.querySelector('.wait-msg').innerText='正在提交任务…';
-  document.getElementById('waitRaw').style.display='none';
-  mask.classList.add('show');
   ctl.timer=setInterval(()=>{
-    document.getElementById('waitSub').innerText='已等待 '+fmtMs(Date.now()-ctl.t0)+' · 重试 '+ctl.tries+' 次';
+    if(node._genState){node._genState.tries=ctl.tries;}
   },1000);
+  draw();
+  saveProjects();
   return ctl;
 }
 function waitSubTick(){
-  if(!waitCtl)return;
-  document.getElementById('waitSub').innerText='已等待 '+fmtMs(Date.now()-waitCtl.t0)+' · 重试 '+waitCtl.tries+' 次';
+  if(!waitCtl||!waitCtl.node||!waitCtl.node._genState)return;
+  waitCtl.node._genState.tries=waitCtl.tries;
 }
 function waitMsg(msg){
-  const el=document.getElementById('waitMsg');
-  if(el)el.innerText=msg;
+  if(!waitCtl||!waitCtl.node||!waitCtl.node._genState)return;
+  waitCtl.node._genState.msg=msg;
 }
 function endWait(){
   if(waitCtl&&waitCtl.timer)clearInterval(waitCtl.timer);
+  if(waitCtl&&waitCtl.node&&waitCtl.node._genState){
+    delete waitCtl.node._genState;
+  }
   waitCtl=null;
-  document.getElementById('waitMask').classList.remove('show');
+  draw();
 }
-// 把接口原始返回显示在遮罩上，任何结构都能看到
+// 把接口原始返回记录在节点状态里
 function showRaw(txt){
-  const el=document.getElementById('waitRaw');
-  if(!el)return;
-  el.innerText='接口原始返回：\n'+txt;
-  el.style.display='block';
+  if(!waitCtl||!waitCtl.node||!waitCtl.node._genState)return;
+  waitCtl.node._genState.raw=txt;
+}
+function cancelWait(){
+  if(!waitCtl)return;
+  waitCtl.cancelled=true;
+  endWait();
+  toast('已取消生成');
 }
 // 宽容提取：不管返回字段叫什么，递归找出视频/图片地址（URL 或 base64）
 function extractResult(obj,kind){
@@ -1756,6 +2510,20 @@ function buildMenuItems(target){
   const selCount=selectedNodes.size;
   if(target.type==='node'){
     const n=target.node;
+    // 如果节点正在生成中，优先显示取消选项
+    if(n._genState){
+      items.push({label:'取消生成',icon:'🚫',danger:true,action:()=>{
+        if(n._genState&&n._genState.ctl)n._genState.ctl.cancelled=true;
+        delete n._genState;
+        if(waitCtl&&waitCtl.node===n){
+          if(waitCtl.timer)clearInterval(waitCtl.timer);
+          waitCtl=null;
+        }
+        draw();
+        toast('已取消生成');
+      }});
+      items.push({sep:true});
+    }
     items.push({label:'编辑节点内容',icon:'✏️',action:()=>openEditModal(n)});
     items.push({label:'重命名',icon:'🔤',action:()=>{
       const nn=prompt('节点标题',n.title);
@@ -1901,7 +2669,7 @@ function drawEdge(a,b,o){
   ctx.save();
   ctx.globalAlpha=o.alpha==null?1:o.alpha;
   ctx.strokeStyle=o.color||'#ffffff';
-  ctx.lineWidth=(o.width||2)/zoom;
+  ctx.lineWidth=(o.width||1.2)/zoom;
   ctx.lineCap='round';
   ctx.setLineDash([7/zoom,6/zoom]);
   ctx.lineDashOffset=(o.flow||0)/zoom;
@@ -2062,6 +2830,47 @@ function draw(){
     ctx.fill();
     ctx.fillStyle='#fff';
     ctx.fillText(n.title,n.x+13,n.y+20);
+    // 生成中状态遮罩
+    if(n._genState){
+      ctx.save();
+      roundRect(n.x,n.y,n.w,n.h,10);
+      ctx.fillStyle='rgba(10,11,16,.72)';
+      ctx.fill();
+      // 旋转加载圈
+      const cx=n.x+n.w/2, cy=n.y+n.h/2-10;
+      const t=performance.now()/600;
+      ctx.strokeStyle='#a78bfa';
+      ctx.lineWidth=2.5;
+      ctx.lineCap='round';
+      ctx.beginPath();
+      ctx.arc(cx,cy,16,t,t+Math.PI*1.3);
+      ctx.stroke();
+      // 状态文字
+      ctx.fillStyle='#e0d7ff';
+      ctx.font='12px system-ui';
+      ctx.textAlign='center';
+      const msg=n._genState.msg||'生成中…';
+      ctx.fillText(msg,cx,cy+36);
+      // 等待时间+重试
+      ctx.fillStyle='#8b8aa3';
+      ctx.font='11px system-ui';
+      const elapsed=fmtMs(Date.now()-n._genState.t0);
+      const tries=n._genState.tries>0?(' · 重试'+n._genState.tries+'次'):'';
+      ctx.fillText(elapsed+tries,cx,cy+52);
+      ctx.textAlign='left';
+      // 类型标签
+      const kindLabel=n._genState.kind==='video'?'🎬 视频生成':'🖼 图片生成';
+      ctx.fillStyle='#c4b5fd';
+      ctx.font='bold 11px system-ui';
+      ctx.fillText(kindLabel,n.x+12,n.y+n.h-12);
+      // 取消提示
+      ctx.fillStyle='#6b7488';
+      ctx.font='10px system-ui';
+      ctx.textAlign='right';
+      ctx.fillText('右键取消',n.x+n.w-12,n.y+n.h-12);
+      ctx.textAlign='left';
+      ctx.restore();
+    }
     ctx.strokeStyle=isSel?'#7c3aed':'#444b66';
     if(connectPendingNode===n)ctx.strokeStyle='#22c55e';
     ctx.lineWidth=(isSel?(lastSelected===n?3:2):2)/zoom;
@@ -2506,12 +3315,15 @@ function tsFinish(e){
     else if(!ts.moved&&!ts.longFired){
       const now=Date.now();
       const tNode=ts.node;
-      if(tNode&&(tNode.type==='audio'||tNode.type==='doc')&&now-lastTapTime<400&&lastTapNode===tNode){
-        if(tNode.type==='audio')playAudioNode(tNode);else openDocNode(tNode);
+      // 移动端双击卡片：与桌面端 dblclick 行为一致
+      if(tNode&&now-lastTapTime<400&&lastTapNode===tNode){
+        if(tNode.type==='audio'){playAudioNode(tNode);}
+        else if(tNode.type==='doc'){openDocNode(tNode);}
+        else{openAIModal(tNode);} // 文本/图片/视频卡片：双击打开AI生成 + 编辑
         lastTapTime=0;lastTapNode=null;
       }else{
         lastTapTime=now;lastTapNode=tNode;
-        toast('已选中节点，长按打开操作菜单');
+        toast('已选中节点，双击编辑/AI生成 · 长按打开菜单');
       }
     }
     dragNodes=null;dragN=null;pressInfo=null;
@@ -2587,13 +3399,18 @@ if(window.visualViewport){
 (async function init(){
   refreshTopBar();
   updateZoomText();
+  applySettings();
   const sh=await ensureSyncPerm(true);
+  if(sh)applySettings();
   const last=localStorage.getItem('pavo_last');
   const projs=loadProjects();
   if(last&&projs[last])loadProject(last);
   else newProject();
   openRecoverModal();
   startLoop();
+  // 启动休眠队列调度器
+  scheduleSleepRetry();
+  updateSleepBadge();
 })();
 </script>
 </body>
