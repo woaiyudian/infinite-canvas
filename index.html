@@ -1934,62 +1934,8 @@ async function runAI(){
     else waitMsg('纯文字生图');
     if(linkedRef)showRaw('【连线参考诊断】\n'+linkedRef.diag.join('\n')+'\n\n请求体实际字段：'+(payload.image?'image=已附带参考画面':'image=无')+'，提示词共 '+fullPrompt.length+' 字符');
     closeAIModal();
-    try{
-      const res=await fetch(API_BASE+'/images/generations',{
-        method:'POST',
-        headers:{'Authorization':'Bearer '+API_KEY,'Content-Type':'application/json'},
-        body:JSON.stringify(payload)
-      });
-      const data=await res.json();
-      if(!waitCtl||waitCtl.cancelled){refImageBlob=null;return;}
-      const url=extractResult(data,'image');
-      if(!url){
-        endWait();
-        showRaw(JSON.stringify(data).slice(0,2000));
-        alert('图片生成失败（HTTP '+(res?res.status:'?')+'），接口原始返回：\n'+JSON.stringify(data).slice(0,500));
-        refImageBlob=null;
-        return;
-      }
-      const c=getViewCenterPos();
-      const ar=ratio==='9:16'?0.5625:(ratio==='1:1'?1:1.7778);
-      const tgt=pendingTarget&&nodes.includes(pendingTarget)?pendingTarget:null;
-      pendingTarget=null;
-      // 下载图片到本地 IndexedDB，确保备份时能嵌入
-      let localSrc=url,localFid=null;
-      try{
-        const blob=await fetch(url).then(r=>r.blob());
-        if(blob&&blob.size>0){
-          localFid='ai_'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
-          await fileDB.put(localFid,blob);
-          localSrc=URL.createObjectURL(blob);
-        }
-      }catch(e){console.warn('AI图片本地保存失败，使用远程地址',e);}
-      if(tgt){
-        destroyVideo(tgt);
-        tgt.type='img';tgt.isVideo=false;
-        tgt.text='';tgt.src=localSrc;tgt.videoSnap=null;
-        if(localFid)tgt._fileId=localFid;
-        tgt._fitted=false;
-        if(!tgt.title)tgt.title='AI生成图片';
-        setSelection([tgt]);
-      }else{
-        const n={
-          x:c.x-90,y:c.y-70,w:180,h:Math.round(180/ar),
-          title:'AI生成图片',type:'img',isVideo:false,src:localSrc
-        };
-        if(localFid)n._fileId=localFid;
-        nodes.push(n);
-        setSelection([n]);
-      }
-      saveProjects();
-      draw();
-      endWait();
-      toast(tgt?'✅ 图片已生成，写回该卡片':'✅ 图片已生成，加入画布');
-    }catch(e){
-      if(waitCtl)endWait();
-      alert('网络请求失败：'+e.message+'\n请检查网络后重试');
-    }
     refImageBlob=null;
+    doSubmitImage(payload,ratio,{prompt:prompt});
     return;
   }
   const dur=document.getElementById("aiDuration").value;
@@ -2137,6 +2083,99 @@ function updateSleepBadge(){
   // 在设置面板或其他地方显示休眠队列数量
   const badge=document.getElementById('sleepBadge');
   if(badge)badge.innerText=q.length?('🕐 休眠队列：'+q.length+' 个'):'';
+}
+// 通用图片提交+重试函数（同步返回，无轮询）
+function doSubmitImage(payload,ratio,item){
+  const RETRY_WAIT=15000;
+  let queueFailCount=0;
+  function later(fn,ms){
+    if(!waitCtl||waitCtl.cancelled)return;
+    setTimeout(()=>{if(waitCtl&&!waitCtl.cancelled)fn();},ms);
+  }
+  async function submit(){
+    if(!waitCtl||waitCtl.cancelled)return;
+    let res=null,data=null,nerr=null;
+    try{
+      res=await fetch(API_BASE+'/images/generations',{
+        method:'POST',
+        headers:{'Authorization':'Bearer '+API_KEY,'Content-Type':'application/json'},
+        body:JSON.stringify(payload)
+      });
+      data=await res.json();
+    }catch(e){nerr=e;}
+    if(!waitCtl||waitCtl.cancelled)return;
+    if(res&&res.ok){
+      const url=extractResult(data,'image');
+      if(url){
+        queueFailCount=0;
+        onSuccess(url);
+        return;
+      }
+      showRaw(JSON.stringify(data||{}).slice(0,2000));
+      waitMsg('返回中无图片地址，重试中…');
+      waitCtl.tries++;
+      later(submit,RETRY_WAIT);
+      return;
+    }
+    waitCtl.tries++;
+    showRaw(JSON.stringify(data||{}).slice(0,2000));
+    const isQueueFull=data&&(data.code==='image_queue_full'||data.code==='video_queue_full');
+    if(isQueueFull){
+      queueFailCount++;
+      let backoffMs;
+      if(queueFailCount===1)backoffMs=3*60*1000;
+      else if(queueFailCount===2)backoffMs=6*60*1000;
+      else if(queueFailCount===3)backoffMs=12*60*1000;
+      else backoffMs=15*60*1000;
+      const mins=(backoffMs/60000).toFixed(0);
+      waitMsg('队列已满（第 '+queueFailCount+' 次），'+mins+' 分钟后再试…');
+      later(submit,backoffMs);
+    }else if(nerr){
+      waitMsg('网络异常，持续重试中…');
+      later(submit,RETRY_WAIT);
+    }else{
+      waitMsg('暂未成功（HTTP '+(res?res.status:'?')+'），持续重试…');
+      later(submit,RETRY_WAIT);
+    }
+  }
+  async function onSuccess(url){
+    const ar=ratio==='9:16'?0.5625:(ratio==='1:1'?1:1.7778);
+    const tgt=pendingTarget&&nodes.includes(pendingTarget)?pendingTarget:null;
+    pendingTarget=null;
+    // 下载图片到本地 IndexedDB
+    let localSrc=url,localFid=null;
+    try{
+      const blob=await fetch(url).then(r=>r.blob());
+      if(blob&&blob.size>0){
+        localFid='ai_'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
+        await fileDB.put(localFid,blob);
+        localSrc=URL.createObjectURL(blob);
+      }
+    }catch(e){console.warn('AI图片本地保存失败，使用远程地址',e);}
+    if(tgt){
+      destroyVideo(tgt);
+      tgt.type='img';tgt.isVideo=false;
+      tgt.text='';tgt.src=localSrc;tgt.videoSnap=null;
+      if(localFid)tgt._fileId=localFid;
+      tgt._fitted=false;
+      if(!tgt.title)tgt.title='AI生成图片';
+      setSelection([tgt]);
+    }else{
+      const c=getViewCenterPos();
+      const n={
+        x:c.x-90,y:c.y-70,w:180,h:Math.round(180/ar),
+        title:'AI生成图片',type:'img',isVideo:false,src:localSrc
+      };
+      if(localFid)n._fileId=localFid;
+      nodes.push(n);
+      setSelection([n]);
+    }
+    saveProjects();
+    draw();
+    endWait();
+    toast(tgt?'✅ 图片已生成，写回该卡片':'✅ 图片已生成，加入画布');
+  }
+  submit();
 }
 // 通用视频提交+轮询函数，供 runAI 和休眠队列重试共用
 function doSubmitVideo(payload,ctl,initialQueueFails,item){
