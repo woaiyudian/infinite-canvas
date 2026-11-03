@@ -2165,29 +2165,14 @@ function doSubmitVideo(payload,ctl,initialQueueFails,item){
     const isQueueFull=data&&data.code==='video_queue_full';
     if(isQueueFull){
       queueFailCount++;
-      if(queueFailCount>=3){
-        const sleepItem={
-          id:'sleep_'+Date.now(),
-          type:'video',
-          payload:payload,
-          targetId:pendingTarget?pendingTarget.id:null,
-          prompt:item?item.prompt:'',
-          videoMode:item?item.videoMode:'text',
-          ratio:item?item.ratio:'16:9',
-          failCount:queueFailCount,
-          createdAt:Date.now(),
-          nextTryAt:nextOffPeakTime()
-        };
-        addToSleepQueue(sleepItem);
-        endWait();
-        const mins=Math.round((nextOffPeakTime()-Date.now())/60000);
-        toast('🕐 队列已满，已加入休眠队列，约 '+mins+' 分钟后自动重试（设置中可查看/手动触发）');
-        scheduleSleepRetry();
-        return;
-      }
-      const backoffMs=getBackoffMs(queueFailCount-1);
+      // 3→6→12→15分钟，第4次起固定15分钟一直重试
+      let backoffMs;
+      if(queueFailCount===1)backoffMs=3*60*1000;
+      else if(queueFailCount===2)backoffMs=6*60*1000;
+      else if(queueFailCount===3)backoffMs=12*60*1000;
+      else backoffMs=15*60*1000;
       const mins=(backoffMs/60000).toFixed(0);
-      waitMsg('队列已满（第 '+queueFailCount+' 次），'+mins+' 分钟后再试… 连续3次将转凌晨低峰重试');
+      waitMsg('队列已满（第 '+queueFailCount+' 次），'+mins+' 分钟后再试…');
       later(submitTask,backoffMs);
     }else if(nerr){
       waitMsg('网络异常，持续重试中…');
