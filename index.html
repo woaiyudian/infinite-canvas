@@ -189,9 +189,22 @@ body{overflow:hidden;background:#0a0b10;color:#fff;height:100vh;height:100dvh;ov
     <div class="form-row" style="margin-top:10px">
       <button class="btn-secondary" onclick="document.getElementById('rcvFile').click()">📂 选择备份文件</button>
       <input type="file" id="rcvFile" accept=".json" multiple style="display:none" onchange="recoverFileInput(event)">
+      <button class="btn-secondary" onclick="showHistoryModal()">🕐 历史版本</button>
       <button class="btn-secondary" onclick="closeRecoverModal()">跳过，直接进入</button>
     </div>
     <div style="font-size:11px;color:#6b7488">备份文件名=项目名，同名自动覆盖；由微力同步在多设备间搬运</div>
+  </div>
+</div>
+
+<div class="modal" id="historyModal">
+  <div class="modal-content" style="width:520px">
+    <h3>🕐 历史版本</h3>
+    <div id="histProject" style="margin-bottom:10px;font-size:13px;color:#94a3b8">选择项目查看历史版本</div>
+    <div id="histBody" style="max-height:360px;overflow-y:auto;font-size:13px"></div>
+    <div class="form-row" style="margin-top:10px;justify-content:flex-end">
+      <button class="btn-secondary" onclick="closeHistoryModal()">关闭</button>
+    </div>
+    <div style="font-size:11px;color:#6b7488">每个项目保留最近 20 个历史版本，回滚前请确认当前内容已不需要</div>
   </div>
 </div>
 
@@ -240,6 +253,7 @@ body{overflow:hidden;background:#0a0b10;color:#fff;height:100vh;height:100dvh;ov
     <div style="font-size:12px;color:#8892ab;margin:4px 0 12px" id="setLastTime"></div>
     <div class="modal-actions">
       <button class="btn-secondary" onclick="saveNowClick()">💾 立即保存</button>
+      <button class="btn-secondary" onclick="closeSettings();showHistoryModal()">🕐 历史版本</button>
       <button class="btn-secondary" onclick="closeSettings()">取消</button>
       <button class="btn-primary" onclick="saveSettings()">保存设置</button>
     </div>
@@ -1000,9 +1014,11 @@ async function writeAllToFolder(p){
   Object.keys(p).forEach(id=>{
     const nm=p[id].name||('项目_'+String(id).slice(-6));
     const base=String(nm).replace(/[\\/:*?"<>|]/g,'_').slice(0,60)+'.json';
-    if(!allNames.has(base))allNames.set(base,id); // 同名时先注册者保留原文件名
+    if(!allNames.has(base))allNames.set(base,id);
   });
   let n=0,bigWarned=0,missTotal=0;
+  const HISTORY_DIR='_history';
+  const MAX_VERSIONS=20;
   for(const id of Object.keys(p)){
     const proj=p[id];
     try{
@@ -1013,10 +1029,34 @@ async function writeAllToFolder(p){
         toast('⚠ 「'+(proj.name||id)+'」上传素材约 '+Math.round(bytes/1048576)+'MB，备份文件会很大');
       }
       const fn=syncFileName(proj,id,allNames);
+      const data=JSON.stringify(Object.assign({projectId:id},proj,{_files:files}));
+      // 1. 写入主备份文件（当前版本）
       const fh=await syncHandle.getFileHandle(fn,{create:true});
       const w=await fh.createWritable();
-      await w.write(JSON.stringify(Object.assign({projectId:id},proj,{_files:files})));
+      await w.write(data);
       await w.close();n++;
+      // 2. 写入历史版本（带时间戳）
+      try{
+        const histDir=await syncHandle.getDirectoryHandle(HISTORY_DIR,{create:true});
+        const baseName=fn.replace(/\.json$/i,'');
+        const ts=new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
+        const verFn=baseName+'_'+ts+'.json';
+        const vfh=await histDir.getFileHandle(verFn,{create:true});
+        const vw=await vfh.createWritable();
+        await vw.write(data);
+        await vw.close();
+        // 3. 清理旧版本：保留最近 MAX_VERSIONS 个
+        const versions=[];
+        for await(const entry of histDir.values()){
+          if(entry.kind==='file'&&entry.name.startsWith(baseName+'_')&&entry.name.endsWith('.json')){
+            versions.push(entry.name);
+          }
+        }
+        versions.sort().reverse();
+        for(let i=MAX_VERSIONS;i<versions.length;i++){
+          try{await histDir.removeEntry(versions[i]);}catch(_){}
+        }
+      }catch(he){console.warn('history write skipped',he);}
     }catch(e){console.error('backup fail',id,e);}
   }
   if(missTotal){toast('⚠ '+missTotal+' 个素材文件在本机库中缺失（可能属于其它设备浏览器），未能内嵌');}
@@ -1256,6 +1296,115 @@ function closeRecoverModal(){
 // 点弹窗外的遮罩空白处即关闭，避免挡住顶栏导致无法双击重命名
 document.getElementById('recoverModal').addEventListener('click',e=>{
   if(e.target.id==='recoverModal')closeRecoverModal();
+});
+// ---- 历史版本恢复 ----
+async function showHistoryModal(){
+  if(!syncHandle){toast('请先连接数据文件夹（设置 → 自动备份）');return;}
+  const m=document.getElementById('historyModal');
+  const body=document.getElementById('histBody');
+  const projInfo=document.getElementById('histProject');
+  m.style.display='flex';
+  body.innerHTML='';
+  try{
+    const histDir=await syncHandle.getDirectoryHandle('_history',{create:false});
+    // 收集所有项目的所有版本
+    const projectMap=new Map();
+    for await(const entry of histDir.values()){
+      if(entry.kind!=='file'||!entry.name.endsWith('.json'))continue;
+      const m2=entry.name.match(/^(.+)_(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})\.json$/i);
+      if(!m2)continue;
+      const baseName=m2[1];
+      const tsStr=m2[2].replace(/-/g,':').replace('T',' ');
+      if(!projectMap.has(baseName))projectMap.set(baseName,[]);
+      projectMap.get(baseName).push({name:entry.name,time:tsStr,file:entry});
+    }
+    if(projectMap.size===0){
+      projInfo.textContent='暂无历史版本（需要先有自动备份才会生成历史记录）';
+      return;
+    }
+    const projects=[...projectMap.keys()].sort();
+    for(const pName of projects){
+      const versions=projectMap.get(pName).sort((a,b)=>b.time.localeCompare(a.time));
+      const wrap=document.createElement('div');
+      wrap.style.cssText='margin-bottom:8px;border:1px solid #334155;border-radius:8px;overflow:hidden';
+      const header=document.createElement('div');
+      header.style.cssText='padding:8px 12px;background:#1e293b;cursor:pointer;font-weight:500';
+      header.textContent='📁 '+pName;
+      const cnt=document.createElement('span');
+      cnt.style.cssText='color:#64748b;font-weight:normal;font-size:12px';
+      cnt.textContent=' （'+versions.length+' 个版本）';
+      header.appendChild(cnt);
+      const list=document.createElement('div');
+      list.style.display='none';
+      header.onclick=()=>{list.style.display=list.style.display==='none'?'block':'none';};
+      for(const v of versions){
+        const row=document.createElement('div');
+        row.style.cssText='padding:8px 12px;border-top:1px solid #334155;display:flex;justify-content:space-between;align-items:center;gap:8px';
+        const timeDiv=document.createElement('div');
+        timeDiv.style.fontSize='13px';
+        timeDiv.textContent='🕐 '+v.time;
+        const btn=document.createElement('button');
+        btn.className='btn-primary';
+        btn.style.cssText='padding:4px 10px;font-size:12px;flex:0 0 auto';
+        btn.textContent='回滚到此版本';
+        btn.onclick=()=>restoreHistoryVersion(v.name,pName,v.time);
+        row.appendChild(timeDiv);
+        row.appendChild(btn);
+        list.appendChild(row);
+      }
+      wrap.appendChild(header);
+      wrap.appendChild(list);
+      body.appendChild(wrap);
+    }
+    projInfo.textContent=projects.length+' 个项目有历史版本，点击展开查看';
+  }catch(e){
+    if(e&&e.name==='NotFoundError'){
+      projInfo.textContent='暂无历史版本（需要先有自动备份才会生成历史记录）';
+    }else{
+      projInfo.textContent='读取失败：'+(e.message||e);
+    }
+  }
+}
+function closeHistoryModal(){
+  document.getElementById('historyModal').style.display='none';
+}
+async function restoreHistoryVersion(fileName,projName,timeStr){
+  if(!confirm('确定回滚「'+projName+'」到 '+timeStr+' 的版本吗？\n\n⚠ 当前内容将被覆盖，建议先导出一份当前备份。'))return;
+  try{
+    const histDir=await syncHandle.getDirectoryHandle('_history',{create:false});
+    const fh=await histDir.getFileHandle(fileName);
+    const file=await fh.getFile();
+    const text=await file.text();
+    const rec=JSON.parse(text);
+    // 直接使用 recoverApply 的逻辑恢复
+    const projId=rec.projectId||('p_'+Date.now());
+    const emb=rec._files;
+    if(emb&&emb.length){
+      for(const f of emb){
+        try{
+          const blob=await (await fetch(f.data)).blob();
+          await fileDB.set(f.fid,blob);
+        }catch(_){}
+      }
+    }
+    const p=loadProjects();
+    const isNew=!p[projId];
+    p[projId]=Object.assign({},rec,{projectId:undefined,_files:undefined,name:rec.name||projName});
+    localStorage.setItem('pavo_projects',JSON.stringify(p));
+    refreshTopBar();
+    scheduleSync();
+    loadProject(projId);
+    const nc=(rec.nodes||[]).length;
+    const ec=(rec.edges||[]).length;
+    toast('✅ 已回滚到 '+timeStr+'（'+nc+' 张卡片 · '+ec+' 条连线'+(emb&&emb.length?' · '+emb.length+' 个素材':'')+'）');
+    closeHistoryModal();
+    closeRecoverModal();
+  }catch(e){
+    toast('回滚失败：'+(e.message||e));
+  }
+}
+document.getElementById('historyModal').addEventListener('click',e=>{
+  if(e.target.id==='historyModal')closeHistoryModal();
 });
 document.getElementById('setModal').addEventListener('click',e=>{
   if(e.target.id==='setModal')closeSettings();
