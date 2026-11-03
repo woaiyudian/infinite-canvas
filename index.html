@@ -483,7 +483,11 @@ function loadProjects(){
 }
 function doSaveProjects(){
   const p=loadProjects();
-  p[currentProjectId]={nodes:serializeNodes(nodes),edges:serializeEdges(),camX,camY,zoom,updated:Date.now()};
+  // 保留项目原有属性（name等），只更新节点和视图数据
+  p[currentProjectId]=Object.assign({},p[currentProjectId]||{},{
+    nodes:serializeNodes(nodes),edges:serializeEdges(),
+    camX,camY,zoom,updated:Date.now()
+  });
   try{localStorage.setItem('pavo_projects',JSON.stringify(p));}catch(e){}
   scheduleSync();
 }
@@ -1152,10 +1156,14 @@ async function scanFolderBackups(){
 async function restoreEmbeddedFiles(rec){
   if(!rec||!rec._files)return 0;
   let n=0;
-  // 用 fetch 替代同步 XHR：同步 XHR 不支持 responseType='blob'，会导致文件恢复静默失败
-  for(const fid of Object.keys(rec._files)){
+  // 兼容两种格式：对象 {fid: dataURL} 或 数组 [{fid, data, name}]
+  const entries=Array.isArray(rec._files)
+    ? rec._files.map(f=>[f.fid,f.data])
+    : Object.entries(rec._files);
+  for(const [fid,fdata] of entries){
+    if(!fid||!fdata)continue;
     try{
-      const blob=await(await fetch(rec._files[fid])).blob();
+      const blob=await(await fetch(fdata)).blob();
       if(blob&&blob.size>0){await fileDB.put(fid,blob);n++;}
     }catch(e){console.error('restoreEmbeddedFiles fail',fid,e);}
   }
@@ -1379,11 +1387,15 @@ async function restoreHistoryVersion(fileName,projName,timeStr){
     // 直接使用 recoverApply 的逻辑恢复
     const projId=rec.projectId||('p_'+Date.now());
     const emb=rec._files;
-    if(emb&&emb.length){
-      for(const f of emb){
+    let embCount=0;
+    if(emb){
+      // 兼容两种格式：对象 {fid: dataURL} 或 数组 [{fid, data, name}]
+      const entries=Array.isArray(emb)?emb.map(f=>[f.fid,f.data]):Object.entries(emb);
+      for(const [fid,fdata] of entries){
+        if(!fid||!fdata)continue;
         try{
-          const blob=await (await fetch(f.data)).blob();
-          await fileDB.set(f.fid,blob);
+          const blob=await (await fetch(fdata)).blob();
+          if(blob&&blob.size>0){await fileDB.put(fid,blob);embCount++;}
         }catch(_){}
       }
     }
@@ -1396,7 +1408,7 @@ async function restoreHistoryVersion(fileName,projName,timeStr){
     loadProject(projId);
     const nc=(rec.nodes||[]).length;
     const ec=(rec.edges||[]).length;
-    toast('✅ 已回滚到 '+timeStr+'（'+nc+' 张卡片 · '+ec+' 条连线'+(emb&&emb.length?' · '+emb.length+' 个素材':'')+'）');
+    toast('✅ 已回滚到 '+timeStr+'（'+nc+' 张卡片 · '+ec+' 条连线'+(embCount?' · '+embCount+' 个素材':'')+'）');
     closeHistoryModal();
     closeRecoverModal();
   }catch(e){
@@ -1877,18 +1889,30 @@ async function runAI(){
       const ar=ratio==='9:16'?0.5625:(ratio==='1:1'?1:1.7778);
       const tgt=pendingTarget&&nodes.includes(pendingTarget)?pendingTarget:null;
       pendingTarget=null;
+      // 下载图片到本地 IndexedDB，确保备份时能嵌入
+      let localSrc=url,localFid=null;
+      try{
+        const blob=await fetch(url).then(r=>r.blob());
+        if(blob&&blob.size>0){
+          localFid='ai_'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
+          await fileDB.put(localFid,blob);
+          localSrc=URL.createObjectURL(blob);
+        }
+      }catch(e){console.warn('AI图片本地保存失败，使用远程地址',e);}
       if(tgt){
         destroyVideo(tgt);
         tgt.type='img';tgt.isVideo=false;
-        tgt.text='';tgt.src=url;tgt.videoSnap=null;
+        tgt.text='';tgt.src=localSrc;tgt.videoSnap=null;
+        if(localFid)tgt._fileId=localFid;
         tgt._fitted=false;
         if(!tgt.title)tgt.title='AI生成图片';
         setSelection([tgt]);
       }else{
         const n={
           x:c.x-90,y:c.y-70,w:180,h:Math.round(180/ar),
-          title:'AI生成图片',type:'img',isVideo:false,src:url
+          title:'AI生成图片',type:'img',isVideo:false,src:localSrc
         };
+        if(localFid)n._fileId=localFid;
         nodes.push(n);
         setSelection([n]);
       }
@@ -2013,20 +2037,31 @@ async function runAI(){
       const c=getViewCenterPos();
       const tgt=pendingTarget&&nodes.includes(pendingTarget)?pendingTarget:null;
       pendingTarget=null;
+      // 下载视频到本地 IndexedDB，确保备份时能嵌入
+      let localSrc=url,localFid=null;
+      try{
+        const blob=await fetch(url).then(r=>r.blob());
+        if(blob&&blob.size>0){
+          localFid='ai_'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
+          await fileDB.put(localFid,blob);
+          localSrc=URL.createObjectURL(blob);
+        }
+      }catch(e){console.warn('AI视频本地保存失败，使用远程地址',e);}
       const n=tgt||{
         x:c.x-90,y:c.y-70,w:180,h:140,
         title:"AI生成视频",type:"video",isVideo:true,
-        _objectUrl:null,videoEl:null,videoSnap:null,videoPlaying:false,src:url
+        _objectUrl:null,videoEl:null,videoSnap:null,videoPlaying:false,src:localSrc
       };
       if(tgt){
         destroyVideo(tgt);
         tgt.type='video';tgt.isVideo=true;
-        tgt.text='';tgt.src=url;tgt.videoSnap=null;tgt._fitted=false;
+        tgt.text='';tgt.src=localSrc;tgt.videoSnap=null;tgt._fitted=false;
         if(!tgt.title)tgt.title='AI生成视频';
       }
-      n._objectUrl=url;
+      if(localFid)n._fileId=localFid;
+      n._objectUrl=localSrc;
       const v=document.createElement('video');
-      v.src=url;
+      v.src=localSrc;
       attachVideo(n,v);
       if(!tgt)nodes.push(n);
       setSelection([n]);
