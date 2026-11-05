@@ -355,17 +355,8 @@ body{overflow:hidden;background:#0a0b10;color:#fff;height:100vh;height:100dvh;ov
       </div>
     </div>
     <div style="border-top:1px solid #2d3348;margin:8px 0;padding-top:12px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-        <h4 style="margin:0;font-size:14px">🕐 视频生成休眠队列</h4>
-        <span id="sleepBadge" style="font-size:12px;color:#a78bfa"></span>
-      </div>
-      <div id="sleepList" style="font-size:12px;color:#8892ab;max-height:120px;overflow-y:auto;margin-bottom:8px">暂无休眠任务</div>
-      <div style="display:flex;gap:8px">
-        <button class="btn-secondary" onclick="manualRetrySleep()" style="flex:1;font-size:12px">▶ 立即重试第一个</button>
-        <button class="btn-secondary" onclick="clearSleepQueue()" style="flex:1;font-size:12px">🗑 清空队列</button>
-      </div>
-      <div style="font-size:11px;color:#6b7488;margin-top:6px">
-        队列满连续失败3次后自动加入，凌晨1-6点自动逐个重试
+      <div style="font-size:12px;color:#6b7488;text-align:center">
+        队列满自动重试：3分钟 → 6分钟 → 15分钟（之后每15分钟重试一次直到成功）
       </div>
     </div>
     <div class="modal-actions">
@@ -440,6 +431,40 @@ function roundRect(x,y,w,h,r){
   ctx.lineTo(x,y+r);
   ctx.quadraticCurveTo(x,y,x+r,y);
   ctx.closePath();
+}
+// 单行文字截断，超出部分用省略号
+function truncateText(text,maxWidth){
+  if(!text)return '';
+  const w=ctx.measureText(text).width;
+  if(w<=maxWidth)return text;
+  let lo=0,hi=text.length;
+  while(lo<hi){
+    const mid=(lo+hi+1)>>1;
+    if(ctx.measureText(text.slice(0,mid)+'…').width<=maxWidth)lo=mid;
+    else hi=mid-1;
+  }
+  return text.slice(0,lo)+'…';
+}
+// 文字自动换行，返回行数组
+function wrapText(text,maxWidth){
+  if(!text)return [];
+  const lines=[];
+  const paragraphs=text.split('\n');
+  for(const p of paragraphs){
+    if(!p){lines.push('');continue;}
+    let cur='';
+    for(const ch of p){
+      const test=cur+ch;
+      if(ctx.measureText(test).width>maxWidth&&cur){
+        lines.push(cur);
+        cur=ch;
+      }else{
+        cur=test;
+      }
+    }
+    if(cur)lines.push(cur);
+  }
+  return lines;
 }
 let toastTimer=null;
 function toast(msg){
@@ -1408,57 +1433,7 @@ function openSettings(){
     lab.innerText=nm?('📂 '+nm):'未选择（点右侧按钮选文件夹）';
   })();
   document.getElementById('setLastTime').innerText=SETTINGS.lastBackup?('上次备份：'+fmtTime(SETTINGS.lastBackup)+(syncHandle?'':'（当前浏览器未连接数据文件夹）')):'尚未备份过';
-  renderSleepList();
   document.getElementById('setModal').style.display='flex';
-}
-function renderSleepList(){
-  const q=loadSleepQueue();
-  const badge=document.getElementById('sleepBadge');
-  const list=document.getElementById('sleepList');
-  if(badge)badge.innerText=q.length?(q.length+' 个待重试'):'';
-  if(!list)return;
-  if(!q.length){list.innerText='暂无休眠任务';return;}
-  let html='';
-  for(const item of q){
-    const t=new Date(item.createdAt);
-    const next=new Date(item.nextTryAt);
-    const promptPreview=(item.prompt||'').slice(0,30);
-    const icon=item.type==='image'?'🖼':'🎬';
-    const label=item.type==='image'?'图片生成':'视频生成';
-    html+='<div style="padding:6px 8px;background:#14161f;border-radius:6px;margin-bottom:4px">';
-    html+='<div style="display:flex;justify-content:space-between;align-items:center">';
-    html+='<span style="color:#cdd5e1">'+icon+' '+(promptPreview||label)+'…</span>';
-    html+='<span style="font-size:11px;color:#a78bfa">失败'+(item.failCount||8)+'次</span>';
-    html+='</div>';
-    html+='<div style="font-size:11px;color:#6b7488;margin-top:2px">加入：'+t.toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})+' · 下次：'+(next>Date.now()?next.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}):'立即');
-    html+='</div></div>';
-  }
-  list.innerHTML=html;
-}
-function manualRetrySleep(){
-  const q=loadSleepQueue();
-  if(!q.length){toast('休眠队列为空');return;}
-  const item=q[0];
-  removeFromSleepQueue(item.id);
-  renderSleepList();
-  // 重新提交
-  pendingTarget=item.targetId?nodes.find(n=>n.id===item.targetId):null;
-  if(item.type==='image'){
-    const ctl=beginWait('🖼 生成图片（手动重试）',pendingTarget||null,'image');
-    if(!ctl){addToSleepQueue(item);renderSleepList();return;}
-    doSubmitImage(item.payload,item.ratio||'16:9',item);
-  }else{
-    const ctl=beginWait('🎬 生成视频（手动重试）',pendingTarget||null,'video');
-    if(!ctl){addToSleepQueue(item);renderSleepList();return;}
-    doSubmitVideo(item.payload,ctl,0,item);
-  }
-}
-function clearSleepQueue(){
-  if(!confirm('确定清空所有休眠中的生成任务？'))return;
-  saveSleepQueue([]);
-  renderSleepList();
-  updateSleepBadge();
-  toast('已清空休眠队列');
 }
 function closeSettings(){document.getElementById('setModal').style.display='none';}
 function saveSettings(){
@@ -2096,125 +2071,6 @@ async function runAI(){
   closeAIModal();
 }
 
-// ---- 视频生成休眠队列：队列满时指数退避，3次失败后入队凌晨重试 ----
-const SLEEP_KEY='pavo_video_sleep_queue';
-function loadSleepQueue(){
-  try{return JSON.parse(localStorage.getItem(SLEEP_KEY)||'[]');}catch(e){return [];}
-}
-function saveSleepQueue(q){
-  try{localStorage.setItem(SLEEP_KEY,JSON.stringify(q));}catch(e){}
-}
-function addToSleepQueue(item){
-  const q=loadSleepQueue();
-  q.push(item);
-  saveSleepQueue(q);
-  updateSleepBadge();
-}
-function removeFromSleepQueue(id){
-  const q=loadSleepQueue().filter(x=>x.id!==id);
-  saveSleepQueue(q);
-  updateSleepBadge();
-}
-function isOffPeakNow(){
-  const h=new Date().getHours();
-  return h>=1&&h<6; // 凌晨1-6点为低峰
-}
-function nextOffPeakTime(){
-  const now=new Date();
-  const t=new Date(now);
-  if(now.getHours()<1){t.setHours(1,0,0,0);}
-  else{t.setDate(t.getDate()+1);t.setHours(1,0,0,0);}
-  return t.getTime();
-}
-let sleepTimer=null;
-function scheduleSleepRetry(){
-  if(sleepTimer){clearTimeout(sleepTimer);sleepTimer=null;}
-  const q=loadSleepQueue();
-  if(!q.length)return;
-  const now=Date.now();
-  // 如果现在是低峰，立即逐个重试
-  if(isOffPeakNow()){
-    processSleepQueue();
-    return;
-  }
-  // 否则等到下一个凌晨1点
-  const waitMs=nextOffPeakTime()-now;
-  sleepTimer=setTimeout(()=>{processSleepQueue();},Math.min(waitMs,2147483000));
-}
-async function processSleepQueue(){
-  const q=loadSleepQueue();
-  if(!q.length)return;
-  // 如果当前已经有任务在跑，等它结束再说
-  if(waitCtl&&!waitCtl.cancelled){
-    setTimeout(processSleepQueue,5000);
-    return;
-  }
-  // 逐个重试，每次只处理一个
-  const item=q[0];
-  removeFromSleepQueue(item.id);
-  renderSleepList();
-  if(item.type==='video'){
-    pendingTarget=item.targetId?nodes.find(n=>n.id===item.targetId):null;
-    const ctl=beginWait('🎬 生成视频（凌晨低峰重试）',pendingTarget||null,'video');
-    if(ctl){
-      doSubmitVideo(item.payload,ctl,0,item);
-      // 等当前任务结束后再安排下一个
-      const checkDone=setInterval(()=>{
-        if(!waitCtl){
-          clearInterval(checkDone);
-          scheduleSleepRetry();
-        }
-      },2000);
-    }else{
-      // 被取消了，重新入队
-      const nq=loadSleepQueue();
-      nq.unshift(item);
-      saveSleepQueue(nq);
-      renderSleepList();
-      scheduleSleepRetry();
-    }
-  }else if(item.type==='image'){
-    pendingTarget=item.targetId?nodes.find(n=>n.id===item.targetId):null;
-    const ctl=beginWait('🖼 生成图片（凌晨低峰重试）',pendingTarget||null,'image');
-    if(ctl){
-      doSubmitImage(item.payload,item.ratio||'16:9',item);
-      // 等当前任务结束后再安排下一个
-      const checkDone=setInterval(()=>{
-        if(!waitCtl){
-          clearInterval(checkDone);
-          scheduleSleepRetry();
-        }
-      },2000);
-    }else{
-      const nq=loadSleepQueue();
-      nq.unshift(item);
-      saveSleepQueue(nq);
-      renderSleepList();
-      scheduleSleepRetry();
-    }
-  }
-}
-// 从休眠项恢复生成
-async function generateVideoFromItem(item){
-  // 重建参数并调用
-  const payload=item.payload;
-  pendingTarget=item.targetId?nodes.find(n=>n.id===item.targetId):null;
-  // 直接调用内部提交逻辑
-  const ctl=beginWait('🎬 生成视频（凌晨低峰重试）',pendingTarget||null,'video');
-  if(!ctl)return;
-  doSubmitVideo(payload,ctl,0,item);
-}
-// 视频提交的指数退避
-const QUEUE_BACKOFF=[3*60*1000,6*60*1000,12*60*1000]; // 3min, 6min, 12min
-function getBackoffMs(queueFailCount){
-  return QUEUE_BACKOFF[Math.min(queueFailCount,QUEUE_BACKOFF.length-1)];
-}
-function updateSleepBadge(){
-  const q=loadSleepQueue();
-  // 在设置面板或其他地方显示休眠队列数量
-  const badge=document.getElementById('sleepBadge');
-  if(badge)badge.innerText=q.length?('🕐 休眠队列：'+q.length+' 个'):'';
-}
 // 通用图片提交+重试函数（同步返回，无轮询）
 function doSubmitImage(payload,ratio,item){
   const RETRY_WAIT=15000;
@@ -2250,33 +2106,13 @@ function doSubmitImage(payload,ratio,item){
     }
     waitCtl.tries++;
     showRaw(JSON.stringify(data||{}).slice(0,2000));
-    // 8次失败后加入休眠队列
-    if(waitCtl.tries>=8){
-      const sleepItem={
-        id:'sleep_'+Date.now(),
-        type:'image',
-        payload:payload,
-        targetId:pendingTarget?pendingTarget.id:null,
-        prompt:item?item.prompt:'',
-        ratio:ratio,
-        failCount:waitCtl.tries,
-        createdAt:Date.now(),
-        nextTryAt:nextOffPeakTime()
-      };
-      addToSleepQueue(sleepItem);
-      endWait();
-      const mins=Math.round((nextOffPeakTime()-Date.now())/60000);
-      toast('🕐 图片生成重试8次未成功，已加入休眠队列，约 '+mins+' 分钟后自动重试（设置中可查看/手动触发）');
-      scheduleSleepRetry();
-      return;
-    }
     const isQueueFull=data&&(data.code==='image_queue_full'||data.code==='video_queue_full');
     if(isQueueFull){
       queueFailCount++;
+      // 3→6→15分钟，第3次起固定15分钟一直重试
       let backoffMs;
       if(queueFailCount===1)backoffMs=3*60*1000;
       else if(queueFailCount===2)backoffMs=6*60*1000;
-      else if(queueFailCount===3)backoffMs=12*60*1000;
       else backoffMs=15*60*1000;
       const mins=(backoffMs/60000).toFixed(0);
       waitMsg('队列已满（第 '+queueFailCount+' 次），'+mins+' 分钟后再试…');
@@ -2361,35 +2197,13 @@ function doSubmitVideo(payload,ctl,initialQueueFails,item){
     waitCtl.tries++;
     waitSubTick();
     showRaw(JSON.stringify(data||{}).slice(0,2000));
-    // 8次失败后加入休眠队列
-    if(waitCtl.tries>=8){
-      const sleepItem={
-        id:'sleep_'+Date.now(),
-        type:'video',
-        payload:payload,
-        targetId:pendingTarget?pendingTarget.id:null,
-        prompt:item?item.prompt:'',
-        videoMode:item?item.videoMode:'text',
-        ratio:item?item.ratio:'16:9',
-        failCount:waitCtl.tries,
-        createdAt:Date.now(),
-        nextTryAt:nextOffPeakTime()
-      };
-      addToSleepQueue(sleepItem);
-      endWait();
-      const mins=Math.round((nextOffPeakTime()-Date.now())/60000);
-      toast('🕐 视频生成重试8次未成功，已加入休眠队列，约 '+mins+' 分钟后自动重试（设置中可查看/手动触发）');
-      scheduleSleepRetry();
-      return;
-    }
     const isQueueFull=data&&data.code==='video_queue_full';
     if(isQueueFull){
       queueFailCount++;
-      // 3→6→12→15分钟，第4次起固定15分钟一直重试
+      // 3→6→15分钟，第3次起固定15分钟一直重试
       let backoffMs;
       if(queueFailCount===1)backoffMs=3*60*1000;
       else if(queueFailCount===2)backoffMs=6*60*1000;
-      else if(queueFailCount===3)backoffMs=12*60*1000;
       else backoffMs=15*60*1000;
       const mins=(backoffMs/60000).toFixed(0);
       waitMsg('队列已满（第 '+queueFailCount+' 次），'+mins+' 分钟后再试…');
@@ -2833,10 +2647,10 @@ async function sendChatImage(text){
     const isQueueFull=data&&(data.code==='image_queue_full'||data.code==='video_queue_full');
     if(isQueueFull){
       queueFails++;
+      // 3→6→15分钟，第3次起固定15分钟一直重试
       let backoffMs;
       if(queueFails===1)backoffMs=3*60*1000;
       else if(queueFails===2)backoffMs=6*60*1000;
-      else if(queueFails===3)backoffMs=12*60*1000;
       else backoffMs=15*60*1000;
       const mins=(backoffMs/60000).toFixed(0);
       msg.genMsg='队列已满（第 '+queueFails+' 次），'+mins+' 分钟后再试…';
@@ -2846,12 +2660,6 @@ async function sendChatImage(text){
       msg.genMsg='网络异常，重试中…';
       renderChatMessages();
       setTimeout(submit,RETRY_WAIT);
-    }else if(tries>=8){
-      msg.genState='error';
-      msg.errorMsg='重试 8 次仍未成功，接口返回：'+(data?.error?.message||JSON.stringify(data||{}).slice(0,100));
-      chatLoading=false;
-      document.getElementById('chatSendBtn').disabled=false;
-      renderChatMessages();
     }else{
       msg.genMsg='暂未成功（HTTP '+(res?res.status:'?')+'），第 '+tries+' 次重试…';
       renderChatMessages();
@@ -2909,10 +2717,10 @@ async function sendChatVideo(text){
     const isQueueFull=data&&data.code==='video_queue_full';
     if(isQueueFull){
       queueFails++;
+      // 3→6→15分钟，第3次起固定15分钟一直重试
       let backoffMs;
       if(queueFails===1)backoffMs=3*60*1000;
       else if(queueFails===2)backoffMs=6*60*1000;
-      else if(queueFails===3)backoffMs=12*60*1000;
       else backoffMs=15*60*1000;
       const mins=(backoffMs/60000).toFixed(0);
       msg.genMsg='队列已满（第 '+queueFails+' 次），'+mins+' 分钟后再试…';
@@ -2922,12 +2730,6 @@ async function sendChatVideo(text){
       msg.genMsg='网络异常，重试中…';
       renderChatMessages();
       setTimeout(submitTask,RETRY_WAIT);
-    }else if(tries>=8){
-      msg.genState='error';
-      msg.errorMsg='重试 8 次仍未成功，接口返回：'+(data?.error?.message||JSON.stringify(data||{}).slice(0,100));
-      chatLoading=false;
-      document.getElementById('chatSendBtn').disabled=false;
-      renderChatMessages();
     }else{
       msg.genMsg='提交失败（HTTP '+(res?res.status:'?')+'），第 '+tries+' 次重试…';
       renderChatMessages();
@@ -3530,21 +3332,32 @@ function draw(){
       ctx.font='12px system-ui';
       const act=n.type==='audio'?' · 双击播放':(n.type==='doc'?' · 双击打开/下载':'');
       const meta=(n.fileSize?fmtSize(n.fileSize):'')+act;
-      ctx.fillText(meta,n.x+14,n.y+84);
+      ctx.fillText(truncateText(meta,n.w-28),n.x+14,n.y+84);
     }
     if(n.type==='text'&&n.text){
       ctx.fillStyle="#cdd5e1";
       ctx.font="12px system-ui";
-      const t=n.text.slice(0,60)+(n.text.length>60?"...":"");
-      ctx.fillText(t,n.x+10,n.y+44);
+      const maxW=n.w-20;
+      const lines=wrapText(n.text,maxW);
+      const lineH=16;
+      const maxLines=Math.max(1,Math.floor((n.h-50)/lineH));
+      const showLines=lines.slice(0,maxLines);
+      if(lines.length>maxLines){
+        showLines[maxLines-1]=truncateText(lines[maxLines-1],maxW);
+      }
+      showLines.forEach((line,i)=>{
+        ctx.fillText(line,n.x+10,n.y+44+i*lineH);
+      });
     }
     ctx.font='12px system-ui';
-    const tw=ctx.measureText(n.title).width;
+    const titleMaxW=n.w-20;
+    const titleText=truncateText(n.title,titleMaxW);
+    const tw=ctx.measureText(titleText).width;
     ctx.fillStyle='rgba(10,11,16,.62)';
     roundRect(n.x+6,n.y+6,Math.min(tw+14,n.w-12),20,6);
     ctx.fill();
     ctx.fillStyle='#fff';
-    ctx.fillText(n.title,n.x+13,n.y+20);
+    ctx.fillText(titleText,n.x+13,n.y+20);
     // 生成中状态遮罩
     if(n._genState){
       ctx.save();
@@ -3564,20 +3377,21 @@ function draw(){
       ctx.fillStyle='#e0d7ff';
       ctx.font='12px system-ui';
       ctx.textAlign='center';
+      const msgMaxW=n.w-24;
       const msg=n._genState.msg||'生成中…';
-      ctx.fillText(msg,cx,cy+36);
+      ctx.fillText(truncateText(msg,msgMaxW),cx,cy+36);
       // 等待时间+重试
       ctx.fillStyle='#8b8aa3';
       ctx.font='11px system-ui';
       const elapsed=fmtMs(Date.now()-n._genState.t0);
       const tries=n._genState.tries>0?(' · 重试'+n._genState.tries+'次'):'';
-      ctx.fillText(elapsed+tries,cx,cy+52);
+      ctx.fillText(truncateText(elapsed+tries,msgMaxW),cx,cy+52);
       ctx.textAlign='left';
       // 类型标签
       const kindLabel=n._genState.kind==='video'?'🎬 视频生成':'🖼 图片生成';
       ctx.fillStyle='#c4b5fd';
       ctx.font='bold 11px system-ui';
-      ctx.fillText(kindLabel,n.x+12,n.y+n.h-12);
+      ctx.fillText(truncateText(kindLabel,n.w-80),n.x+12,n.y+n.h-12);
       // 取消提示
       ctx.fillStyle='#6b7488';
       ctx.font='10px system-ui';
@@ -4126,9 +3940,6 @@ if(window.visualViewport){
   else newProject();
   openRecoverModal();
   startLoop();
-  // 启动休眠队列调度器
-  scheduleSleepRetry();
-  updateSleepBadge();
   // 点击画布/空白处关闭更多菜单
   document.addEventListener('mousedown',e=>{
     const menu=document.getElementById('toolMoreMenu');
