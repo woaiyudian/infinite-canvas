@@ -2598,7 +2598,7 @@ let chatHistory=[]; // [{role:'user'|'assistant', content:'', type:'text'|'image
 let chatLoading=false;
 let chatMode='chat'; // chat | image | video
 let chatGenCount=0; // 生成中的计数器，用于取消判断
-const CHAT_MODEL='agnes-chat'; // 聊天用 Agnes 模型
+const CHAT_MODEL='agnes-2.5-flash'; // 聊天用 Agnes 模型
 function openChatModal(){
   document.getElementById('chatModal').style.display='flex';
   if(chatHistory.length===0){
@@ -2758,7 +2758,7 @@ async function sendChatImage(text){
   document.getElementById('chatSendBtn').disabled=true;
   const payload={
     prompt:text,
-    model:'agnes-image-2.0',
+    model:'agnes-image-2.5-flash',
     ratio:ratio,
     n:1
   };
