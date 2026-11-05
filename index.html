@@ -14,7 +14,13 @@ body{overflow:hidden;background:#0a0b10;color:#fff;height:100vh;height:100dvh;ov
 .top-bar .del-proj{color:#ef4444;cursor:pointer;font-size:14px;user-select:none}
 .toolbar{position:fixed;left:12px;top:64px;display:flex;flex-direction:column;gap:8px;background:#1c2030;padding:10px;border-radius:12px;border:1px solid #2d3348;z-index:10}
 .tool-btn{width:40px;height:40px;border:none;background:#2d3348;color:#fff;border-radius:8px;font-size:18px;cursor:pointer}
-.tool-btn:hover{background:#3d4358}
+.tool-btn:hover{background:#3d4360}
+.tool-divider{width:100%;height:1px;background:#2d3348;margin:4px 0}
+.tool-more-wrap{position:relative}
+.tool-more-menu{position:absolute;left:52px;top:0;min-width:180px;background:#191d2b;border:1px solid #2f3550;border-radius:10px;padding:6px;display:none;box-shadow:0 12px 34px rgba(0,0,0,.6);z-index:30}
+.tool-more-menu.show{display:block}
+.tool-more-item{padding:8px 12px;border-radius:6px;cursor:pointer;color:#dfe4f0;font-size:13px;white-space:nowrap}
+.tool-more-item:hover{background:#252a3d}
 .zoom-bar{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);display:flex;gap:8px;align-items:center;background:#1c2030;padding:6px 12px;border-radius:20px;border:1px solid #2d3348;z-index:10}
 .zoom-bar button{width:28px;height:28px;border:none;background:#2d3348;color:#fff;border-radius:6px;cursor:pointer}
 #zoomLabel{font-size:13px;min-width:40px;text-align:center}
@@ -32,6 +38,39 @@ body{overflow:hidden;background:#0a0b10;color:#fff;height:100vh;height:100dvh;ov
 .edit-modal label{display:block;margin:8px 0 4px}
 .edit-modal input,.edit-modal textarea{width:100%;padding:8px;border-radius:6px;border:1px solid #2d3348;background:#0a0b10;color:#fff;font-size:13px}
 .edit-modal textarea{min-height:100px;resize:vertical}
+/* AI 聊天弹窗 */
+.chat-modal-content{width:620px;max-width:95vw;display:flex;flex-direction:column;padding:0;overflow:hidden}
+.chat-header{display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid #2d3348}
+.chat-header h3{margin:0;font-size:16px}
+.chat-small-btn{padding:4px 10px;font-size:14px;min-width:auto}
+.chat-messages{flex:1;min-height:300px;max-height:60vh;overflow-y:auto;padding:16px 18px;display:flex;flex-direction:column;gap:12px}
+.chat-msg{max-width:85%;display:flex;flex-direction:column;gap:4px}
+.chat-msg.user{align-self:flex-end;align-items:flex-end}
+.chat-msg.assistant{align-self:flex-start;align-items:flex-start}
+.chat-bubble{padding:10px 14px;border-radius:12px;font-size:14px;line-height:1.6;white-space:pre-wrap;word-break:break-word}
+.chat-msg.user .chat-bubble{background:#7c3aed;color:#fff;border-bottom-right-radius:4px}
+.chat-msg.assistant .chat-bubble{background:#252a3d;color:#e0d7ff;border-bottom-left-radius:4px}
+.chat-role{font-size:11px;color:#6b7488;padding:0 4px}
+.chat-msg.user .chat-role{text-align:right}
+.chat-input-area{padding:12px 18px;border-top:1px solid #2d3348;background:#14161f}
+.chat-input-area textarea{width:100%;min-height:60px;max-height:120px;padding:10px;border-radius:8px;border:1px solid #2d3348;background:#0a0b10;color:#fff;font-size:14px;resize:vertical;font-family:inherit;line-height:1.5}
+.chat-input-area textarea:focus{outline:none;border-color:#7c3aed}
+.chat-typing{display:inline-flex;gap:4px;padding:8px 0}
+.chat-typing span{width:6px;height:6px;border-radius:50%;background:#a78bfa;animation:chatBounce 1.2s infinite}
+.chat-typing span:nth-child(2){animation-delay:.15s}
+.chat-typing span:nth-child(3){animation-delay:.3s}
+@keyframes chatBounce{0%,60%,100%{transform:translateY(0);opacity:.5}30%{transform:translateY(-6px);opacity:1}}
+.chat-mode-tabs{display:flex;gap:2px;background:#0a0b10;border-radius:8px;padding:3px}
+.chat-mode-tab{background:none;border:none;color:#8892ab;padding:5px 12px;border-radius:6px;font-size:12px;cursor:pointer;transition:all .2s}
+.chat-mode-tab:hover{color:#cdd5e1}
+.chat-mode-tab.active{background:#7c3aed;color:#fff}
+.chat-gen-media{width:100%;border-radius:8px;overflow:hidden;margin-top:6px}
+.chat-gen-media img,.chat-gen-media video{width:100%;display:block}
+.chat-gen-actions{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+.chat-gen-actions button{padding:5px 10px;font-size:12px;border-radius:6px;border:1px solid #2d3348;background:#14161f;color:#cdd5e1;cursor:pointer}
+.chat-gen-actions button:hover{background:#1c2030}
+.chat-gen-actions .btn-add{background:#7c3aed;color:#fff;border-color:#7c3aed}
+.chat-gen-actions .btn-add:hover{background:#8b5cf6}
 .ctx-menu{position:fixed;z-index:200;min-width:212px;background:#191d2b;border:1px solid #2f3550;border-radius:10px;padding:6px;display:none;box-shadow:0 12px 34px rgba(0,0,0,.6);font-size:13px;user-select:none}
 .ctx-item{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:6px;cursor:pointer;color:#dfe4f0;white-space:nowrap}
 .ctx-item:hover{background:#7c3aed;color:#fff}
@@ -76,6 +115,9 @@ body{overflow:hidden;background:#0a0b10;color:#fff;height:100vh;height:100dvh;ov
   .edit-modal input,.edit-modal textarea{font-size:15px;padding:10px}
   .edit-modal textarea{min-height:120px}
   .edit-modal button{padding:10px 16px;font-size:15px}
+  .chat-modal-content{width:100%!important;max-width:100vw;height:100vh;border-radius:0}
+  .chat-messages{max-height:calc(100vh - 200px);min-height:calc(100vh - 240px)}
+  .chat-input-area textarea{font-size:16px;min-height:80px}
   .toolbar{top:56px;padding:6px;gap:6px}
   .tool-btn{width:40px;height:40px;font-size:17px}
   .zoom-bar{bottom:10px;padding:4px 8px}
@@ -92,17 +134,23 @@ body{overflow:hidden;background:#0a0b10;color:#fff;height:100vh;height:100dvh;ov
 <canvas id="cv"></canvas>
 <div class="toolbar">
   <button class="tool-btn" onclick="addNode()" title="新增节点">+</button>
-  <button class="tool-btn" onclick="openAIModal()" title="AI生成">✨</button>
-  <button class="tool-btn" onclick="chainSelected()" title="连接两个节点【先点第一个节点，点这个按钮，再点第二个】">🔗</button>
-  <button class="tool-btn" onclick="selectAll()" title="全选所有节点">▣</button>
+  <button class="tool-btn" onclick="openChatModal()" title="AI助手（对话/图片/视频）">✨</button>
+  <button class="tool-btn" onclick="chainSelected()" title="连接节点">🔗</button>
   <button class="tool-btn" onclick="delSel()" title="删除选中">🗑</button>
-  <button class="tool-btn" onclick="uploadAsset()" title="上传图片/视频素材">🖼</button>
-  <button class="tool-btn" onclick="exportPNG()" title="导出画布截图">📸</button>
-  <button class="tool-btn" onclick="exportSelectedContents()" title="导出选中卡片的内容(文字/图片/视频)">📤</button>
-  <button class="tool-btn" id="setBtn" onclick="openSettings()" title="自动保存设置">⚙️</button>
-  <button class="tool-btn" onclick="syncBtnClick()" title="数据文件夹：立即备份/恢复（配合微力同步）">🔄</button>
-  <button class="tool-btn" onclick="exportJSON()" title="导出项目文件">💾</button>
-  <button class="tool-btn" onclick="importJSON()" title="导入项目文件">📂</button>
+  <button class="tool-btn" onclick="uploadAsset()" title="上传素材">🖼</button>
+  <button class="tool-btn" onclick="selectAll()" title="全选">▣</button>
+  <button class="tool-btn" onclick="exportSelectedContents()" title="导出选中内容">📤</button>
+  <button class="tool-btn" onclick="openSettings()" title="设置">⚙️</button>
+  <div class="tool-more-wrap">
+    <button class="tool-btn" onclick="toggleToolMore()" title="更多">⋯</button>
+    <div class="tool-more-menu" id="toolMoreMenu">
+      <div class="tool-more-item" onclick="openAIModal();toggleToolMore()">🎨 AI生成分镜面板</div>
+      <div class="tool-more-item" onclick="exportPNG();toggleToolMore()">📸 导出画布截图</div>
+      <div class="tool-more-item" onclick="exportJSON();toggleToolMore()">💾 导出项目文件</div>
+      <div class="tool-more-item" onclick="importJSON();toggleToolMore()">📂 导入项目文件</div>
+      <div class="tool-more-item" onclick="syncBtnClick();toggleToolMore()">🔄 数据文件夹同步</div>
+    </div>
+  </div>
 </div>
 <div class="zoom-bar">
   <button onclick="zoomOut()">-</button>
@@ -216,6 +264,48 @@ body{overflow:hidden;background:#0a0b10;color:#fff;height:100vh;height:100dvh;ov
   <div style="margin-top:12px;display:flex;gap:8px;justify-content:flex-end">
     <button class="btn-secondary" onclick="closeEditModal()">取消</button>
     <button class="btn-primary" onclick="saveEdit()">保存</button>
+  </div>
+</div>
+
+<!-- AI 聊天弹窗 -->
+<div class="modal" id="chatModal">
+  <div class="modal-content chat-modal-content">
+    <div class="chat-header">
+      <div style="display:flex;align-items:center;gap:10px">
+        <h3>💬 AI 对话</h3>
+        <div class="chat-mode-tabs">
+          <button class="chat-mode-tab active" data-mode="chat" onclick="setChatMode('chat')">对话</button>
+          <button class="chat-mode-tab" data-mode="image" onclick="setChatMode('image')">🖼 图片</button>
+          <button class="chat-mode-tab" data-mode="video" onclick="setChatMode('video')">🎬 视频</button>
+        </div>
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="btn-secondary chat-small-btn" onclick="newChat()" title="新对话">🆕</button>
+        <button class="btn-secondary chat-small-btn" onclick="closeChatModal()">✕</button>
+      </div>
+    </div>
+    <div id="chatMessages" class="chat-messages"></div>
+    <div class="chat-input-area">
+      <div id="chatGenOptions" style="display:none;margin-bottom:10px;gap:10px;align-items:center;font-size:12px;color:#94a3b8">
+        <label>画面比例：</label>
+        <select id="chatRatio" style="background:#0a0b10;border:1px solid #2d3348;color:#fff;border-radius:6px;padding:4px 8px;font-size:12px">
+          <option value="16:9">16:9 横屏</option>
+          <option value="9:16">9:16 竖屏短剧</option>
+          <option value="1:1">1:1 正方形</option>
+        </select>
+        <span id="chatGenHint" style="margin-left:auto;color:#6b7488">描述画面，AI 生成后可加入画布</span>
+      </div>
+      <textarea id="chatInput" placeholder="输入消息，Shift+Enter 换行，Enter 发送" onkeydown="chatInputKey(event)" oninput="updateChatCharCount()"></textarea>
+      <div style="display:flex;gap:6px;margin-top:8px;justify-content:space-between;align-items:center">
+        <div style="font-size:12px;color:#6b7488">
+          <span id="chatCharCount">0 字</span>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="btn-secondary" onclick="chatToCard()" id="chatToCardBtn" title="把AI回复转成画布卡片">📋 转卡片</button>
+          <button class="btn-primary" onclick="sendChat()" id="chatSendBtn">发送</button>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -2503,7 +2593,461 @@ function saveEdit(){
   closeEditModal();
   draw();
 }
+// ========== AI 聊天 ==========
+let chatHistory=[]; // [{role:'user'|'assistant', content:'', type:'text'|'image'|'video', mediaUrl, ratio, genId}]
+let chatLoading=false;
+let chatMode='chat'; // chat | image | video
+let chatGenCount=0; // 生成中的计数器，用于取消判断
+const CHAT_MODEL='agnes-chat'; // 聊天用 Agnes 模型
+function openChatModal(){
+  document.getElementById('chatModal').style.display='flex';
+  if(chatHistory.length===0){
+    renderChatMessages();
+  }
+  setTimeout(()=>document.getElementById('chatInput').focus(),100);
+}
+function closeChatModal(){
+  document.getElementById('chatModal').style.display='none';
+}
+function setChatMode(mode){
+  chatMode=mode;
+  document.querySelectorAll('.chat-mode-tab').forEach(t=>{
+    t.classList.toggle('active',t.dataset.mode===mode);
+  });
+  const opts=document.getElementById('chatGenOptions');
+  const toCardBtn=document.getElementById('chatToCardBtn');
+  if(mode==='chat'){
+    opts.style.display='none';
+    toCardBtn.style.display='';
+    document.getElementById('chatInput').placeholder='输入消息，Shift+Enter 换行，Enter 发送';
+  }else{
+    opts.style.display='flex';
+    toCardBtn.style.display='none';
+    document.getElementById('chatInput').placeholder=mode==='image'?'描述要生成的画面…':'描述要生成的视频画面…';
+  }
+}
+function newChat(){
+  if(chatLoading){toast('请等待当前回复完成');return;}
+  chatHistory=[];
+  renderChatMessages();
+  document.getElementById('chatInput').value='';
+  updateChatCharCount();
+}
+function chatInputKey(e){
+  if(e.key==='Enter'&&!e.shiftKey){
+    e.preventDefault();
+    sendChat();
+  }
+}
+function updateChatCharCount(){
+  const v=document.getElementById('chatInput').value;
+  document.getElementById('chatCharCount').innerText=v.length+' 字';
+}
+function renderChatMessages(){
+  const box=document.getElementById('chatMessages');
+  if(chatHistory.length===0){
+    const tip=chatMode==='chat'?'可以聊剧本、创意、分镜构思…':(chatMode==='image'?'描述画面，AI 生成图片，一键加入画布':'描述视频画面，AI 生成视频，一键加入画布');
+    const icon=chatMode==='chat'?'💬':(chatMode==='image'?'🖼':'🎬');
+    box.innerHTML='<div style="text-align:center;color:#6b7488;padding:40px 20px;font-size:14px"><div style="font-size:32px;margin-bottom:12px">'+icon+'</div>开始'+(chatMode==='chat'?'和 AI 对话':('AI '+ (chatMode==='image'?'图片':'视频') +' 生成'))+'吧<br><span style="font-size:12px">'+tip+'</span></div>';
+    return;
+  }
+  let html='';
+  chatHistory.forEach((m,idx)=>{
+    const role=m.role==='user'?'你':'AI';
+    html+='<div class="chat-msg '+m.role+'" data-idx="'+idx+'">';
+    html+='<div class="chat-role">'+role+'</div>';
+    html+='<div class="chat-bubble">';
+    html+=escapeHtml(m.content);
+    // 媒体内容
+    if(m.type==='image'&&m.mediaUrl){
+      html+='<div class="chat-gen-media"><img src="'+m.mediaUrl+'" alt="生成图片"></div>';
+      html+='<div class="chat-gen-actions">';
+      html+='<button class="btn-add" onclick="chatMediaToCanvas('+idx+')">➕ 加入画布</button>';
+      html+='<button onclick="chatDownloadMedia('+idx+')">⬇ 下载</button>';
+      html+='</div>';
+    }else if(m.type==='video'&&m.mediaUrl){
+      html+='<div class="chat-gen-media"><video src="'+m.mediaUrl+'" controls playsinline></video></div>';
+      html+='<div class="chat-gen-actions">';
+      html+='<button class="btn-add" onclick="chatMediaToCanvas('+idx+')">➕ 加入画布</button>';
+      html+='<button onclick="chatDownloadMedia('+idx+')">⬇ 下载</button>';
+      html+='</div>';
+    }else if((m.type==='image'||m.type==='video')&&m.genState==='loading'){
+      html+='<div style="margin-top:8px;padding:10px;background:#0a0b10;border-radius:6px;text-align:center">';
+      html+='<div class="chat-typing" style="justify-content:center"><span></span><span></span><span></span></div>';
+      html+='<div style="font-size:12px;color:#94a3b8;margin-top:6px">'+(m.genMsg||'生成中…')+'</div>';
+      html+='</div>';
+    }else if((m.type==='image'||m.type==='video')&&m.genState==='error'){
+      html+='<div style="margin-top:8px;padding:10px;background:#2d1b1b;border-radius:6px;color:#fca5a5;font-size:12px">❌ '+escapeHtml(m.errorMsg||'生成失败')+'</div>';
+    }
+    html+='</div></div>';
+  });
+  box.innerHTML=html;
+  box.scrollTop=box.scrollHeight;
+}
+function escapeHtml(s){
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function sendChat(){
+  const input=document.getElementById('chatInput');
+  const text=input.value.trim();
+  if(!text){toast('请输入内容');return;}
+  if(chatLoading){toast('请等待当前回复完成');return;}
+  if(chatMode==='chat'){
+    sendChatText(text);
+  }else if(chatMode==='image'){
+    sendChatImage(text);
+  }else if(chatMode==='video'){
+    sendChatVideo(text);
+  }
+  input.value='';
+  updateChatCharCount();
+}
+async function sendChatText(text){
+  chatHistory.push({role:'user',content:text,type:'text'});
+  chatLoading=true;
+  renderChatMessages();
+  document.getElementById('chatSendBtn').disabled=true;
+  try{
+    // 只取文字消息作为上下文
+    const textMsgs=chatHistory.filter(m=>m.type==='text'&&(m.role==='user'||m.role==='assistant')).map(m=>({role:m.role,content:m.content}));
+    const messages=[
+      {role:'system',content:'你是一个短剧创作助手，擅长构思剧本、分镜、人物设定和创意。回答要简洁实用，多用要点式表达。'},
+      ...textMsgs
+    ];
+    const res=await fetch(API_BASE+'/chat/completions',{
+      method:'POST',
+      headers:{'Authorization':'Bearer '+API_KEY,'Content-Type':'application/json'},
+      body:JSON.stringify({
+        model:CHAT_MODEL,
+        messages:messages,
+        temperature:0.8
+      })
+    });
+    const data=await res.json();
+    if(!res.ok){
+      throw new Error(data.error?.message||('HTTP '+res.status));
+    }
+    const reply=data.choices?.[0]?.message?.content||'';
+    if(!reply){
+      throw new Error('接口返回为空');
+    }
+    chatHistory.push({role:'assistant',content:reply,type:'text'});
+  }catch(e){
+    chatHistory.push({role:'assistant',content:'❌ 出错了：'+e.message,type:'text'});
+  }
+  chatLoading=false;
+  document.getElementById('chatSendBtn').disabled=false;
+  renderChatMessages();
+}
+async function sendChatImage(text){
+  const ratio=document.getElementById('chatRatio').value;
+  const genId='gen_'+Date.now();
+  chatHistory.push({role:'user',content:text,type:'text'});
+  const replyIdx=chatHistory.length;
+  chatHistory.push({
+    role:'assistant',
+    content:'🖼 正在生成图片…\n提示词：'+text.slice(0,50)+(text.length>50?'…':''),
+    type:'image',
+    ratio:ratio,
+    genState:'loading',
+    genMsg:'提交中…',
+    genId:genId
+  });
+  chatLoading=true;
+  renderChatMessages();
+  document.getElementById('chatSendBtn').disabled=true;
+  const payload={
+    prompt:text,
+    model:'agnes-image-2.0',
+    ratio:ratio,
+    n:1
+  };
+  let tries=0,queueFails=0;
+  const RETRY_WAIT=15000;
+  async function submit(){
+    if(!chatLoading)return;
+    tries++;
+    let res=null,data=null,nerr=null;
+    try{
+      res=await fetch(API_BASE+'/images/generations',{
+        method:'POST',
+        headers:{'Authorization':'Bearer '+API_KEY,'Content-Type':'application/json'},
+        body:JSON.stringify(payload)
+      });
+      data=await res.json();
+    }catch(e){nerr=e;}
+    if(!chatLoading)return;
+    const msg=chatHistory[replyIdx];
+    if(res&&res.ok){
+      const url=extractResult(data,'image');
+      if(url){
+        // 下载到本地 IndexedDB
+        let localSrc=url,localFid=null;
+        try{
+          const blob=await fetch(url).then(r=>r.blob());
+          if(blob&&blob.size>0){
+            localFid='ai_'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
+            await fileDB.put(localFid,blob);
+            localSrc=URL.createObjectURL(blob);
+          }
+        }catch(e){console.warn('聊天图片本地保存失败',e);}
+        msg.genState='done';
+        msg.mediaUrl=localSrc;
+        msg._fileId=localFid;
+        msg.content='✅ 图片生成完成\n提示词：'+text.slice(0,50)+(text.length>50?'…':'');
+        chatLoading=false;
+        document.getElementById('chatSendBtn').disabled=false;
+        renderChatMessages();
+        return;
+      }
+      msg.genMsg='返回中无图片地址，重试中…';
+      renderChatMessages();
+      setTimeout(submit,RETRY_WAIT);
+      return;
+    }
+    // 失败处理
+    const isQueueFull=data&&(data.code==='image_queue_full'||data.code==='video_queue_full');
+    if(isQueueFull){
+      queueFails++;
+      let backoffMs;
+      if(queueFails===1)backoffMs=3*60*1000;
+      else if(queueFails===2)backoffMs=6*60*1000;
+      else if(queueFails===3)backoffMs=12*60*1000;
+      else backoffMs=15*60*1000;
+      const mins=(backoffMs/60000).toFixed(0);
+      msg.genMsg='队列已满（第 '+queueFails+' 次），'+mins+' 分钟后再试…';
+      renderChatMessages();
+      setTimeout(submit,backoffMs);
+    }else if(nerr){
+      msg.genMsg='网络异常，重试中…';
+      renderChatMessages();
+      setTimeout(submit,RETRY_WAIT);
+    }else if(tries>=8){
+      msg.genState='error';
+      msg.errorMsg='重试 8 次仍未成功，接口返回：'+(data?.error?.message||JSON.stringify(data||{}).slice(0,100));
+      chatLoading=false;
+      document.getElementById('chatSendBtn').disabled=false;
+      renderChatMessages();
+    }else{
+      msg.genMsg='暂未成功（HTTP '+(res?res.status:'?')+'），第 '+tries+' 次重试…';
+      renderChatMessages();
+      setTimeout(submit,RETRY_WAIT);
+    }
+  }
+  submit();
+}
+async function sendChatVideo(text){
+  const ratio=document.getElementById('chatRatio').value;
+  const genId='gen_'+Date.now();
+  chatHistory.push({role:'user',content:text,type:'text'});
+  const replyIdx=chatHistory.length;
+  chatHistory.push({
+    role:'assistant',
+    content:'🎬 正在生成视频…\n提示词：'+text.slice(0,50)+(text.length>50?'…':''),
+    type:'video',
+    ratio:ratio,
+    genState:'loading',
+    genMsg:'提交中…',
+    genId:genId
+  });
+  chatLoading=true;
+  renderChatMessages();
+  document.getElementById('chatSendBtn').disabled=true;
+  const payload={
+    model:'agnes-video-2.5-flash',
+    prompt:text,
+    ratio:ratio,
+    duration:5
+  };
+  let tries=0,queueFails=0;
+  const RETRY_WAIT=20000;
+  const pollBase=API_BASE.replace('/v1','');
+  async function submitTask(){
+    if(!chatLoading)return;
+    tries++;
+    let res=null,data=null,nerr=null;
+    try{
+      res=await fetch(API_BASE+"/videos",{
+        method:"POST",
+        headers:{"Authorization":"Bearer "+API_KEY,"Content-Type":"application/json"},
+        body:JSON.stringify(payload)
+      });
+      data=await res.json();
+    }catch(e){nerr=e;}
+    if(!chatLoading)return;
+    const msg=chatHistory[replyIdx];
+    if(res&&res.ok&&data.id){
+      msg.genMsg='已提交（ID:'+data.id.slice(0,8)+'…），排队中…';
+      renderChatMessages();
+      setTimeout(()=>poll(data.id),3000);
+      return;
+    }
+    const isQueueFull=data&&data.code==='video_queue_full';
+    if(isQueueFull){
+      queueFails++;
+      let backoffMs;
+      if(queueFails===1)backoffMs=3*60*1000;
+      else if(queueFails===2)backoffMs=6*60*1000;
+      else if(queueFails===3)backoffMs=12*60*1000;
+      else backoffMs=15*60*1000;
+      const mins=(backoffMs/60000).toFixed(0);
+      msg.genMsg='队列已满（第 '+queueFails+' 次），'+mins+' 分钟后再试…';
+      renderChatMessages();
+      setTimeout(submitTask,backoffMs);
+    }else if(nerr){
+      msg.genMsg='网络异常，重试中…';
+      renderChatMessages();
+      setTimeout(submitTask,RETRY_WAIT);
+    }else if(tries>=8){
+      msg.genState='error';
+      msg.errorMsg='重试 8 次仍未成功，接口返回：'+(data?.error?.message||JSON.stringify(data||{}).slice(0,100));
+      chatLoading=false;
+      document.getElementById('chatSendBtn').disabled=false;
+      renderChatMessages();
+    }else{
+      msg.genMsg='提交失败（HTTP '+(res?res.status:'?')+'），第 '+tries+' 次重试…';
+      renderChatMessages();
+      setTimeout(submitTask,RETRY_WAIT);
+    }
+  }
+  async function poll(id){
+    if(!chatLoading)return;
+    let res=null,data=null,nerr=null;
+    try{
+      res=await fetch(pollBase+"/api/open/v1/videos/"+id+"?model_name=agnes-video-2.5-flash",{
+        headers:{"Authorization":"Bearer "+API_KEY}
+      });
+      data=await res.json();
+    }catch(e){nerr=e;}
+    if(!chatLoading)return;
+    const msg=chatHistory[replyIdx];
+    if(nerr||!res||!res.ok){
+      msg.genMsg='查询状态失败，稍后再试…';
+      renderChatMessages();
+      setTimeout(()=>poll(id),5000);
+      return;
+    }
+    const status=data.status||data.data?.status;
+    const progress=data.progress||data.data?.progress||0;
+    if(status==='succeeded'||status==='completed'){
+      const videoUrl=data.video_url||data.data?.video_url||(data.data?.outputs?.[0]?.url);
+      if(videoUrl){
+        // 下载到本地 IndexedDB
+        let localSrc=videoUrl,localFid=null;
+        try{
+          const blob=await fetch(videoUrl).then(r=>r.blob());
+          if(blob&&blob.size>0){
+            localFid='ai_'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
+            await fileDB.put(localFid,blob);
+            localSrc=URL.createObjectURL(blob);
+          }
+        }catch(e){console.warn('聊天视频本地保存失败',e);}
+        msg.genState='done';
+        msg.mediaUrl=localSrc;
+        msg._fileId=localFid;
+        msg.content='✅ 视频生成完成\n提示词：'+text.slice(0,50)+(text.length>50?'…':'');
+        chatLoading=false;
+        document.getElementById('chatSendBtn').disabled=false;
+        renderChatMessages();
+        return;
+      }
+      msg.genState='error';
+      msg.errorMsg='生成成功但无视频地址';
+      chatLoading=false;
+      document.getElementById('chatSendBtn').disabled=false;
+      renderChatMessages();
+      return;
+    }
+    if(status==='failed'||status==='error'){
+      msg.genState='error';
+      msg.errorMsg=data.error?.message||data.data?.error||'生成失败';
+      chatLoading=false;
+      document.getElementById('chatSendBtn').disabled=false;
+      renderChatMessages();
+      return;
+    }
+    // 进行中
+    const pct=typeof progress==='number'?progress+'%':'';
+    const label=status==='processing'?'生成中':(status==='queued'?'排队中':status);
+    msg.genMsg=label+(pct?(' '+pct):'');
+    renderChatMessages();
+    setTimeout(()=>poll(id),4000);
+  }
+  submitTask();
+}
+function chatMediaToCanvas(idx){
+  const m=chatHistory[idx];
+  if(!m||!m.mediaUrl){toast('内容不存在');return;}
+  const c=getViewCenterPos();
+  const ratio=m.ratio||'16:9';
+  const ar=ratio==='9:16'?0.5625:(ratio==='1:1'?1:1.7778);
+  const w=220,h=Math.round(w/ar);
+  const n={
+    x:c.x-w/2,y:c.y-h/2,w:w,h:h,
+    title:m.type==='video'?'AI生成视频':'AI生成图片',
+    type:m.type==='video'?'video':'img',
+    isVideo:m.type==='video',
+    src:m.mediaUrl,
+    videoSnap:null
+  };
+  if(m._fileId)n._fileId=m._fileId;
+  nodes.push(n);
+  // 如果是视频，生成快照
+  if(m.type==='video'){
+    const v=document.createElement('video');
+    v.src=m.mediaUrl;
+    v.crossOrigin='anonymous';
+    v.muted=true;v.playsInline=true;
+    v.addEventListener('loadeddata',()=>{
+      const cv=document.createElement('canvas');
+      cv.width=v.videoWidth||320;cv.height=v.videoHeight||180;
+      cv.getContext('2d').drawImage(v,0,0,cv.width,cv.height);
+      n.videoSnap=cv;
+      draw();
+      saveProjects();
+    },{once:true});
+    v.load();
+  }
+  setSelection([n]);
+  saveProjects();
+  draw();
+  toast('✅ 已加入画布');
+}
+function chatDownloadMedia(idx){
+  const m=chatHistory[idx];
+  if(!m||!m.mediaUrl){toast('内容不存在');return;}
+  const a=document.createElement('a');
+  a.href=m.mediaUrl;
+  a.download=(m.type==='video'?'ai_video_':'ai_image_')+Date.now()+(m.type==='video'?'.mp4':'.png');
+  a.click();
+}
+function chatToCard(){
+  // 把最后一条 AI 文字回复转成文本卡片放到画布中心
+  const textMsgs=chatHistory.filter(m=>m.role==='assistant'&&m.type==='text');
+  const lastReply=textMsgs.slice(-1)[0];
+  if(!lastReply){toast('还没有文字回复可以转');return;}
+  const c=getViewCenterPos();
+  const text=lastReply.content;
+  const firstLine=text.split('\n')[0].slice(0,30);
+  const n={
+    x:c.x-120,y:c.y-80,w:240,h:160,
+    title:firstLine||'AI对话',
+    type:'text',isVideo:false,
+    text:text
+  };
+  nodes.push(n);
+  setSelection([n]);
+  saveProjects();
+  draw();
+  toast('✅ 已创建文本卡片');
+}
 const ctxMenuEl=document.getElementById('ctxMenu');
+
+function toggleToolMore(){
+  const menu=document.getElementById('toolMoreMenu');
+  if(!menu)return;
+  menu.style.display=menu.style.display==='block'?'none':'block';
+}
 
 function buildMenuItems(target){
   const items=[];
@@ -3411,6 +3955,14 @@ if(window.visualViewport){
   // 启动休眠队列调度器
   scheduleSleepRetry();
   updateSleepBadge();
+  // 点击画布/空白处关闭更多菜单
+  document.addEventListener('mousedown',e=>{
+    const menu=document.getElementById('toolMoreMenu');
+    if(menu&&menu.style.display==='block'){
+      const wrap=e.target.closest('.tool-more-wrap');
+      if(!wrap)menu.style.display='none';
+    }
+  });
 })();
 </script>
 </body>
