@@ -343,6 +343,19 @@ body{overflow:hidden;background:#0a0b10;color:#fff;height:100vh;height:100dvh;ov
     <div style="font-size:12px;color:#8892ab;margin:4px 0 12px" id="setLastTime"></div>
     <div style="border-top:1px solid #2d3348;margin:8px 0;padding-top:12px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <h4 style="margin:0;font-size:14px">💬 AI聊天历史</h4>
+        <span id="chatSyncStatus" style="font-size:12px;color:#6b7488">未同步</span>
+      </div>
+      <div style="font-size:12px;color:#8892ab;margin-bottom:8px">
+        聊天历史自动保存在数据文件夹，配合微力同步多端共享
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn-secondary" onclick="loadChatHistory();toast('已重新加载聊天历史');" style="flex:1;font-size:12px">🔄 重新加载</button>
+        <button class="btn-secondary" onclick="saveChatHistory();toast('已立即保存');" style="flex:1;font-size:12px">💾 立即保存</button>
+      </div>
+    </div>
+    <div style="border-top:1px solid #2d3348;margin:8px 0;padding-top:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
         <h4 style="margin:0;font-size:14px">🕐 视频生成休眠队列</h4>
         <span id="sleepBadge" style="font-size:12px;color:#a78bfa"></span>
       </div>
@@ -1233,6 +1246,7 @@ async function changeSyncFolder(){
     if(lab)lab.innerText=h.name;
     toast('📁 保存路径已改为「'+h.name+'」');
     trySync(true);
+    loadChatHistory();
   }catch(e){
     if(e&&e.name==='AbortError')return;
     toast('选择失败：'+(e&&e.message||e));
@@ -2632,6 +2646,14 @@ function newChat(){
   renderChatMessages();
   document.getElementById('chatInput').value='';
   updateChatCharCount();
+  // 清空后删除备份文件
+  if(syncHandle){
+    (async()=>{
+      try{
+        await syncHandle.removeEntry(CHAT_HISTORY_FILE);
+      }catch(e){}
+    })();
+  }
 }
 function chatInputKey(e){
   if(e.key==='Enter'&&!e.shiftKey){
@@ -2683,6 +2705,10 @@ function renderChatMessages(){
   });
   box.innerHTML=html;
   box.scrollTop=box.scrollHeight;
+  // 不在加载中时，自动保存聊天历史
+  if(!chatLoading&&chatHistory.length>0){
+    saveChatHistoryDebounced();
+  }
 }
 function escapeHtml(s){
   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -3047,6 +3073,148 @@ function toggleToolMore(){
   const menu=document.getElementById('toolMoreMenu');
   if(!menu)return;
   menu.style.display=menu.style.display==='block'?'none':'block';
+}
+
+// ========== 聊天历史同步 ==========
+let chatHistoryFileHandle=null;
+let chatSaveTimer=null;
+const CHAT_HISTORY_FILE='chat_history.json';
+
+// 将聊天历史序列化（blob URL 转 base64）
+function serializeChatHistory(history){
+  return history.map(m=>{
+    const copy={...m};
+    if(copy.mediaUrl&&copy.mediaUrl.startsWith('blob:')){
+      // 转成 base64 存入文件
+      // 注意：这里用一个标记，实际转换在 saveChatHistory 里用 fetch 做
+      copy._mediaBlobUrl=copy.mediaUrl;
+      delete copy.mediaUrl;
+    }
+    // 运行时状态不保存
+    delete copy.genState;
+    delete copy.genMsg;
+    delete copy.genId;
+    delete copy.errorMsg;
+    return copy;
+  });
+}
+
+// 保存聊天历史到数据文件夹
+async function saveChatHistory(){
+  if(!syncHandle||!chatHistory.length)return;
+  try{
+    // 将媒体 blob URL 转成 base64
+    const serialized=[];
+    for(const m of chatHistory){
+      const copy={...m};
+      if(copy.mediaUrl&&copy.mediaUrl.startsWith('blob:')){
+        try{
+          const res=await fetch(copy.mediaUrl);
+          const blob=await res.blob();
+          const b64=await new Promise((resolve,reject)=>{
+            const fr=new FileReader();
+            fr.onload=()=>resolve(fr.result);
+            fr.onerror=reject;
+            fr.readAsDataURL(blob);
+          });
+          copy._mediaB64=b64;
+          copy._mediaType=blob.type;
+          delete copy.mediaUrl;
+        }catch(e){
+          console.warn('聊天媒体转base64失败',e);
+        }
+      }
+      // 不保存运行时状态
+      delete copy.genState;
+      delete copy.genMsg;
+      delete copy.genId;
+      delete copy.errorMsg;
+      serialized.push(copy);
+    }
+    const data={
+      version:1,
+      updated:Date.now(),
+      history:serialized
+    };
+    const json=JSON.stringify(data);
+    try{
+      const file=await syncHandle.getFileHandle(CHAT_HISTORY_FILE,{create:true});
+      const writable=await file.createWritable();
+      await writable.write(json);
+      await writable.close();
+      updateChatSyncStatus(data.updated);
+    }catch(e){
+      console.warn('聊天历史写入文件夹失败',e);
+    }
+  }catch(e){
+    console.warn('保存聊天历史失败',e);
+  }
+}
+
+// 防抖保存聊天历史
+function saveChatHistoryDebounced(){
+  if(!syncHandle)return;
+  if(chatSaveTimer)clearTimeout(chatSaveTimer);
+  chatSaveTimer=setTimeout(()=>{
+    saveChatHistory();
+  },2000);
+}
+
+// 从数据文件夹加载聊天历史
+async function loadChatHistory(){
+  if(!syncHandle)return false;
+  try{
+    const file=await syncHandle.getFileHandle(CHAT_HISTORY_FILE);
+    const fileData=await file.getFile();
+    const text=await fileData.text();
+    const data=JSON.parse(text);
+    if(!data.history||!Array.isArray(data.history))return false;
+    // 将 base64 转回 blob URL
+    const restored=[];
+    for(const m of data.history){
+      const copy={...m};
+      if(copy._mediaB64){
+        try{
+          const res=await fetch(copy._mediaB64);
+          const blob=await res.blob();
+          copy.mediaUrl=URL.createObjectURL(blob);
+          // 如果有 fileId，存进 IndexedDB
+          if(copy._fileId){
+            try{await fileDB.put(copy._fileId,blob);}catch(e){}
+          }
+          delete copy._mediaB64;
+          delete copy._mediaType;
+        }catch(e){
+          console.warn('聊天媒体base64转blob失败',e);
+        }
+      }
+      restored.push(copy);
+    }
+    chatHistory=restored;
+    updateChatSyncStatus(data.updated);
+    return true;
+  }catch(e){
+    if(e.name!=='NotFoundError'){
+      console.warn('加载聊天历史失败',e);
+    }
+    updateChatSyncStatus(null);
+    return false;
+  }
+}
+
+function updateChatSyncStatus(updated){
+  const el=document.getElementById('chatSyncStatus');
+  if(!el)return;
+  if(!syncHandle){el.innerText='未同步';el.style.color='#6b7488';return;}
+  if(chatHistory.length===0){el.innerText='暂无记录';el.style.color='#6b7488';return;}
+  if(updated){
+    const d=new Date(updated);
+    const t=d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0');
+    el.innerText='已同步 '+chatHistory.length+' 条 · '+t;
+  }else{
+    el.innerText=chatHistory.length+' 条';
+  }
+  el.style.color='#4ade80';
 }
 
 function buildMenuItems(target){
@@ -3945,7 +4113,10 @@ if(window.visualViewport){
   updateZoomText();
   applySettings();
   const sh=await ensureSyncPerm(true);
-  if(sh)applySettings();
+  if(sh){
+    applySettings();
+    loadChatHistory();
+  }
   const last=localStorage.getItem('pavo_last');
   const projs=loadProjects();
   if(last&&projs[last])loadProject(last);
