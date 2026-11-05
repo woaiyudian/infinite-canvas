@@ -350,7 +350,7 @@ body{overflow:hidden;background:#0a0b10;color:#fff;height:100vh;height:100dvh;ov
         聊天历史自动保存在数据文件夹，配合微力同步多端共享
       </div>
       <div style="display:flex;gap:8px">
-        <button class="btn-secondary" onclick="loadChatHistory();toast('已重新加载聊天历史');" style="flex:1;font-size:12px">🔄 重新加载</button>
+        <button class="btn-secondary" onclick="loadChatHistory().then(ok=>{if(ok){openChatModal();toast('已加载 '+chatHistory.length+' 条聊天记录');}else{toast('暂无聊天历史记录');}});" style="flex:1;font-size:12px">🔄 重新加载</button>
         <button class="btn-secondary" onclick="saveChatHistory();toast('已立即保存');" style="flex:1;font-size:12px">💾 立即保存</button>
       </div>
     </div>
@@ -2615,9 +2615,7 @@ let chatGenCount=0; // 生成中的计数器，用于取消判断
 const CHAT_MODEL='agnes-2.5-flash'; // 聊天用 Agnes 模型
 function openChatModal(){
   document.getElementById('chatModal').style.display='flex';
-  if(chatHistory.length===0){
-    renderChatMessages();
-  }
+  renderChatMessages();
   setTimeout(()=>document.getElementById('chatInput').focus(),100);
 }
 function closeChatModal(){
@@ -3192,6 +3190,11 @@ async function loadChatHistory(){
     }
     chatHistory=restored;
     updateChatSyncStatus(data.updated);
+    // 如果聊天窗口已打开，自动刷新显示
+    const chatModal=document.getElementById('chatModal');
+    if(chatModal&&chatModal.style.display==='flex'){
+      renderChatMessages();
+    }
     return true;
   }catch(e){
     if(e.name!=='NotFoundError'){
