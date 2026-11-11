@@ -131,6 +131,9 @@ body{overflow:hidden;background:#0a0b10;color:#fff;height:100vh;height:100dvh;ov
 </head>
 <body>
 <div class="top-bar" id="topBar"></div>
+<div id="offlineBadge" style="position:fixed;top:12px;right:16px;z-index:30;display:none;align-items:center;gap:6px;padding:6px 12px;background:#92400e;color:#fcd34d;border-radius:8px;font-size:12px;font-weight:500;box-shadow:0 2px 8px rgba(0,0,0,.4)">
+  <span>📴</span><span>已离线 · 恢复后自动继续</span>
+</div>
 <canvas id="cv"></canvas>
 <div class="toolbar">
   <button class="tool-btn" onclick="addNode()" title="新增节点">+</button>
@@ -474,6 +477,81 @@ function toast(msg){
   clearTimeout(toastTimer);
   toastTimer=setTimeout(()=>el.classList.remove('show'),1600);
 }
+// ---- 离线状态检测与自动重试 ----
+let isOnline=navigator.onLine!==false;
+const offlineListeners=[]; // 网络恢复时的回调列表
+function updateOnlineStatus(){
+  const wasOnline=isOnline;
+  isOnline=navigator.onLine!==false;
+  const el=document.getElementById('offlineBadge');
+  if(el){
+    el.style.display=isOnline?'none':'flex';
+  }
+  if(!wasOnline&&isOnline){
+    // 网络恢复：立即触发所有等待中的重试
+    toast('📶 网络已恢复，继续生成任务');
+    const fns=offlineListeners.splice(0);
+    fns.forEach(fn=>{try{fn();}catch(e){}});
+  }else if(wasOnline&&!isOnline){
+    toast('📴 网络已断开，生成任务将在恢复后自动继续');
+  }
+}
+// 注册一个等待网络恢复的回调，返回取消函数
+function waitForOnline(fn){
+  if(isOnline){try{fn();}catch(e){}return ()=>{};}
+  offlineListeners.push(fn);
+  let removed=false;
+  return ()=>{
+    if(removed)return;
+    removed=true;
+    const i=offlineListeners.indexOf(fn);
+    if(i>=0)offlineListeners.splice(i,1);
+  };
+}
+// ---- 生成任务持久化：刷新/重开页面后自动恢复继续生成 ----
+const GEN_TASK_KEY='pavo_gen_tasks';
+function loadGenTasks(){
+  try{return JSON.parse(localStorage.getItem(GEN_TASK_KEY)||'{}');}catch(e){return {};}
+}
+function saveGenTask(projId,task){
+  const all=loadGenTasks();
+  if(!all[projId])all[projId]=[];
+  const idx=all[projId].findIndex(t=>t.nodeId===task.nodeId);
+  if(idx>=0)all[projId][idx]={...all[projId][idx],...task};
+  else all[projId].push(task);
+  try{localStorage.setItem(GEN_TASK_KEY,JSON.stringify(all));}catch(e){}
+}
+function removeGenTask(projId,nodeId){
+  const all=loadGenTasks();
+  if(all[projId]){
+    all[projId]=all[projId].filter(t=>t.nodeId!==nodeId);
+    if(!all[projId].length)delete all[projId];
+  }
+  try{localStorage.setItem(GEN_TASK_KEY,JSON.stringify(all));}catch(e){}
+}
+function getGenTasks(projId){
+  const all=loadGenTasks();
+  return all[projId]||[];
+}
+// 页面卸载前保存当前进行中的任务
+function persistCurrentGenTask(){
+  if(!waitCtl||!waitCtl.node||waitCtl.cancelled)return;
+  const node=waitCtl.node;
+  if(!node.id||!currentProjectId)return;
+  const gs=node._genState;
+  if(!gs)return;
+  saveGenTask(currentProjectId,{
+    nodeId:node.id,
+    kind:gs.kind||'video',
+    taskId:gs.taskId||null,
+    payload:gs.payload||null,
+    ratio:gs.ratio||'16:9',
+    queueFailCount:gs.queueFailCount||0,
+    tries:waitCtl.tries||0,
+    t0:gs.t0||Date.now(),
+    msg:gs.msg||''
+  });
+}
 function blobToBase64(blob){
   return new Promise(resolve=>{
     const r=new FileReader();
@@ -661,6 +739,130 @@ function loadProject(id){
   refreshTopBar();
   updateZoomText();
   draw();
+  // 恢复进行中的生成任务
+  restoreGenTasks(id);
+}
+// 恢复持久化的生成任务
+function restoreGenTasks(projId){
+  const tasks=getGenTasks(projId);
+  if(!tasks.length)return;
+  // 只恢复第一个任务（因为同时只能有一个生成任务在跑）
+  const task=tasks[0];
+  const node=nodes.find(n=>n.id===task.nodeId);
+  if(!node){removeGenTask(projId,task.nodeId);return;}
+  // 跳过超时超过2小时的任务
+  if(task.t0&&Date.now()-task.t0>2*60*60*1000){
+    removeGenTask(projId,task.nodeId);
+    return;
+  }
+  // 如果已经提交了（有taskId），直接进入轮询
+  if(task.taskId&&task.kind==='video'){
+    pendingTarget=node;
+    const ctl=beginWait('🔄 恢复视频生成',node,'video');
+    if(ctl){
+      ctl.tries=task.tries||0;
+      if(node._genState){
+        node._genState.taskId=task.taskId;
+        node._genState.payload=task.payload;
+        node._genState.ratio=task.ratio||'16:9';
+        node._genState.queueFailCount=task.queueFailCount||0;
+        persistCurrentGenTask();
+      }
+      resumeVideoPoll(task.taskId,node,ctl);
+    }
+  }else if(task.payload){
+    // 还没提交成功，重新提交
+    pendingTarget=node;
+    const ctl=beginWait('🔄 恢复'+(task.kind==='image'?'图片':'视频')+'生成',node,task.kind);
+    if(ctl){
+      ctl.tries=task.tries||0;
+      if(task.kind==='image'){
+        doSubmitImage(task.payload,task.ratio||'16:9',null);
+      }else{
+        doSubmitVideo(task.payload,ctl,task.queueFailCount||0,{ratio:task.ratio});
+      }
+    }
+  }
+  toast('🔄 已恢复生成任务');
+}
+// 恢复视频轮询（只做轮询，不再提交）
+function resumeVideoPoll(vid,node,ctl){
+  const pollBase=API_BASE.replace('/v1','');
+  let pollDelay=5000;
+  function later(fn,ms){
+    if(!waitCtl||waitCtl.cancelled)return;
+    setTimeout(()=>{if(waitCtl&&!waitCtl.cancelled)fn();},ms);
+  }
+  async function poll(){
+    if(!waitCtl||waitCtl.cancelled)return;
+    let pr=null,pd=null,nerr=null;
+    try{
+      pr=await fetch(pollBase+"/agnesapi?video_id="+vid+"&model_name=agnes-video-2.5-flash",{
+        headers:{"Authorization":"Bearer "+API_KEY}
+      });
+      pd=await pr.json();
+    }catch(e){nerr=e;}
+    if(!waitCtl||waitCtl.cancelled)return;
+    if(nerr||(pr&&!pr.ok)||(pd&&pd.error&&!pd.status&&!pd.state&&!pd.task_status)){
+      const is429=(pr&&pr.status===429)||(pd&&pd.error&&(/429|频繁|too many/i.test(pd.error.code+' '+pd.error.message||'')));
+      if(is429){pollDelay=Math.min(30000,pollDelay*2);}
+      showRaw(pr?('HTTP '+pr.status+'\n'+JSON.stringify(pd||{})):(nerr&&nerr.message)||'未知网络错误');
+      if(nerr&&!isOnline){
+        waitMsg('📴 网络已断开，等待恢复后继续查询…');
+        waitForOnline(()=>{if(waitCtl&&!waitCtl.cancelled)poll();});
+        return;
+      }
+      waitMsg((is429?'查询被限流(429)，已放慢到 '+Math.round(pollDelay/1000)+' 秒一查':'查询进度异常（'+(pr?'HTTP '+pr.status:'网络错误')+'），继续等待…')+' 任务号：'+vid.slice(0,8)+'…');
+      later(poll,pollDelay);
+      return;
+    }
+    if(pollDelay!==5000){pollDelay=5000;}
+    const st=String(pd.status||pd.state||pd.task_status||'').toLowerCase();
+    const done=(st==='completed'||st==='success'||st==='succeeded'||st==='finished'||st==='done'||st.includes('complete')||st.includes('success'));
+    const bad=(st==='failed'||st==='error'||st.includes('fail')||st.includes('cancel'));
+    if(done){
+      showRaw(JSON.stringify(pd).slice(0,2000));
+      const url=extractResult(pd,'video');
+      if(!url){
+        endWait();
+        toast('⚠️ 任务完成但未获取到视频地址');
+        return;
+      }
+      // 下载到本地并写回节点
+      (async()=>{
+        let localSrc=url,localFid=null;
+        try{
+          const blob=await fetch(url).then(r=>r.blob());
+          if(blob&&blob.size>0){
+            localFid='ai_'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
+            await fileDB.put(localFid,blob);
+            localSrc=URL.createObjectURL(blob);
+          }
+        }catch(e){console.warn('AI视频本地保存失败',e);}
+        const tgt=node;
+        pendingTarget=null;
+        destroyVideo(tgt);
+        tgt.type='video';tgt.isVideo=true;
+        tgt.text='';tgt.src=localSrc;tgt.videoSnap=null;
+        if(localFid)tgt._fileId=localFid;
+        tgt._fitted=false;
+        if(!tgt.title)tgt.title='AI生成视频';
+        saveProjects();
+        draw();
+        endWait();
+        toast('✅ 视频已生成，写回该卡片');
+      })();
+    }else if(bad){
+      showRaw(JSON.stringify(pd).slice(0,2000));
+      endWait();
+      toast('❌ 生成失败');
+    }else{
+      const prog=pd.progress||pd.data?.progress||0;
+      waitMsg('生成中…'+(prog?(' '+prog+'%'):''));
+      later(poll,pollDelay);
+    }
+  }
+  poll();
 }
 function newProject(){
   if(currentProjectId)saveProjects();
@@ -2075,6 +2277,13 @@ async function runAI(){
 function doSubmitImage(payload,ratio,item){
   const RETRY_WAIT=15000;
   let queueFailCount=0;
+  // 把关键信息存到节点状态，用于持久化恢复
+  if(waitCtl&&waitCtl.node&&waitCtl.node._genState){
+    waitCtl.node._genState.payload=payload;
+    waitCtl.node._genState.ratio=ratio;
+    waitCtl.node._genState.queueFailCount=0;
+    persistCurrentGenTask();
+  }
   function later(fn,ms){
     if(!waitCtl||waitCtl.cancelled)return;
     setTimeout(()=>{if(waitCtl&&!waitCtl.cancelled)fn();},ms);
@@ -2109,6 +2318,10 @@ function doSubmitImage(payload,ratio,item){
     const isQueueFull=data&&(data.code==='image_queue_full'||data.code==='video_queue_full');
     if(isQueueFull){
       queueFailCount++;
+      if(waitCtl&&waitCtl.node&&waitCtl.node._genState){
+        waitCtl.node._genState.queueFailCount=queueFailCount;
+        persistCurrentGenTask();
+      }
       // 3→6→15分钟，第3次起固定15分钟一直重试
       let backoffMs;
       if(queueFailCount===1)backoffMs=3*60*1000;
@@ -2118,8 +2331,14 @@ function doSubmitImage(payload,ratio,item){
       waitMsg('队列已满（第 '+queueFailCount+' 次），'+mins+' 分钟后再试…');
       later(submit,backoffMs);
     }else if(nerr){
-      waitMsg('网络异常，持续重试中…');
-      later(submit,RETRY_WAIT);
+      // 网络错误：如果是离线状态，等恢复后立即重试；否则按正常间隔重试
+      if(!isOnline){
+        waitMsg('📴 网络已断开，等待恢复后继续…');
+        waitForOnline(()=>{if(waitCtl&&!waitCtl.cancelled)submit();});
+      }else{
+        waitMsg('网络异常，持续重试中…');
+        later(submit,RETRY_WAIT);
+      }
     }else{
       waitMsg('暂未成功（HTTP '+(res?res.status:'?')+'），持续重试…');
       later(submit,RETRY_WAIT);
@@ -2170,6 +2389,13 @@ function doSubmitVideo(payload,ctl,initialQueueFails,item){
   let pollDelay=5000;
   let queueFailCount=initialQueueFails||0;
   const pollBase=API_BASE.replace('/v1','');
+  // 把关键信息存到节点状态，用于持久化恢复
+  if(waitCtl&&waitCtl.node&&waitCtl.node._genState){
+    waitCtl.node._genState.payload=payload;
+    waitCtl.node._genState.ratio=item?.ratio||'16:9';
+    waitCtl.node._genState.queueFailCount=queueFailCount;
+    persistCurrentGenTask();
+  }
   function later(fn,ms){
     if(!waitCtl||waitCtl.cancelled)return;
     setTimeout(()=>{if(waitCtl&&!waitCtl.cancelled)fn();},ms);
@@ -2188,7 +2414,15 @@ function doSubmitVideo(payload,ctl,initialQueueFails,item){
     if(!waitCtl||waitCtl.cancelled)return;
     if(res&&res.ok){
       const vid=data&&(data.video_id||data.id||data.task_id||(data.data&&(data.data.video_id||data.data.id||data.data.task_id)));
-      if(vid){queueFailCount=0;poll(vid);return;}
+      if(vid){
+        queueFailCount=0;
+        if(waitCtl.node&&waitCtl.node._genState){
+          waitCtl.node._genState.taskId=vid;
+          waitCtl.node._genState.queueFailCount=0;
+          persistCurrentGenTask();
+        }
+        poll(vid);return;
+      }
       showRaw(JSON.stringify(data||{}).slice(0,2000));
       endWait();
       alert('提交成功但没拿到任务号，接口原始返回：\n'+JSON.stringify(data||{}).slice(0,700));
@@ -2200,6 +2434,10 @@ function doSubmitVideo(payload,ctl,initialQueueFails,item){
     const isQueueFull=data&&data.code==='video_queue_full';
     if(isQueueFull){
       queueFailCount++;
+      if(waitCtl&&waitCtl.node&&waitCtl.node._genState){
+        waitCtl.node._genState.queueFailCount=queueFailCount;
+        persistCurrentGenTask();
+      }
       // 3→6→15分钟，第3次起固定15分钟一直重试
       let backoffMs;
       if(queueFailCount===1)backoffMs=3*60*1000;
@@ -2209,8 +2447,14 @@ function doSubmitVideo(payload,ctl,initialQueueFails,item){
       waitMsg('队列已满（第 '+queueFailCount+' 次），'+mins+' 分钟后再试…');
       later(submitTask,backoffMs);
     }else if(nerr){
-      waitMsg('网络异常，持续重试中…');
-      later(submitTask,RETRY_WAIT);
+      // 网络错误：如果是离线状态，等恢复后立即重试；否则按正常间隔重试
+      if(!isOnline){
+        waitMsg('📴 网络已断开，等待恢复后继续…');
+        waitForOnline(()=>{if(waitCtl&&!waitCtl.cancelled)submitTask();});
+      }else{
+        waitMsg('网络异常，持续重试中…');
+        later(submitTask,RETRY_WAIT);
+      }
     }else{
       waitMsg('暂未提交成功（HTTP '+(res?res.status:'?')+'）：'+JSON.stringify(data||{}).slice(0,90)+'，持续重试…');
       later(submitTask,RETRY_WAIT);
@@ -2230,6 +2474,12 @@ function doSubmitVideo(payload,ctl,initialQueueFails,item){
       const is429=(pr&&pr.status===429)||(pd&&pd.error&&(/429|频繁|too many/i.test(pd.error.code+' '+pd.error.message||'')));
       if(is429){pollDelay=Math.min(30000,pollDelay*2);}
       showRaw(pr?('HTTP '+pr.status+'\n'+JSON.stringify(pd||{})):(nerr&&nerr.message)||'未知网络错误');
+      // 网络异常：离线时等待恢复，否则按正常间隔重试
+      if(nerr&&!isOnline){
+        waitMsg('📴 网络已断开，等待恢复后继续查询…');
+        waitForOnline(()=>{if(waitCtl&&!waitCtl.cancelled)poll(vid);});
+        return;
+      }
       waitMsg((is429?'查询被限流(429)，已放慢到 '+Math.round(pollDelay/1000)+' 秒一查（任务已在生成中，不会重复提交）':'查询进度异常（'+(pr?'HTTP '+pr.status:'网络错误')+'），继续等待…')+' 任务号：'+vid);
       later(()=>poll(vid),pollDelay);
       return;
@@ -2337,6 +2587,10 @@ function waitMsg(msg){
 function endWait(){
   if(waitCtl&&waitCtl.timer)clearInterval(waitCtl.timer);
   if(waitCtl&&waitCtl.node&&waitCtl.node._genState){
+    // 完成时删除持久化记录
+    if(currentProjectId&&waitCtl.node.id){
+      removeGenTask(currentProjectId,waitCtl.node.id);
+    }
     delete waitCtl.node._genState;
   }
   waitCtl=null;
@@ -2381,12 +2635,10 @@ function extractResult(obj,kind){
   }
   return null;
 }
-// 有任务在生成时，关闭或刷新页面会先弹浏览器确认框，防误关丢任务
+// 页面卸载前保存进行中的任务，下次打开自动恢复
 window.addEventListener('beforeunload',e=>{
-  if(waitCtl&&!waitCtl.cancelled){
-    e.preventDefault();
-    e.returnValue='还有任务正在生成，确定要离开吗？';
-  }
+  persistCurrentGenTask();
+  persistChatGenTask();
 });
 function cancelWait(){
   if(!waitCtl)return;
@@ -2657,9 +2909,16 @@ async function sendChatImage(text){
       renderChatMessages();
       setTimeout(submit,backoffMs);
     }else if(nerr){
-      msg.genMsg='网络异常，重试中…';
-      renderChatMessages();
-      setTimeout(submit,RETRY_WAIT);
+      // 网络错误：离线时等待恢复，否则按正常间隔重试
+      if(!isOnline){
+        msg.genMsg='📴 网络已断开，等待恢复后继续…';
+        renderChatMessages();
+        waitForOnline(()=>{if(chatLoading)submit();});
+      }else{
+        msg.genMsg='网络异常，重试中…';
+        renderChatMessages();
+        setTimeout(submit,RETRY_WAIT);
+      }
     }else{
       msg.genMsg='暂未成功（HTTP '+(res?res.status:'?')+'），第 '+tries+' 次重试…';
       renderChatMessages();
@@ -2710,7 +2969,9 @@ async function sendChatVideo(text){
     const msg=chatHistory[replyIdx];
     if(res&&res.ok&&data.id){
       msg.genMsg='已提交（ID:'+data.id.slice(0,8)+'…），排队中…';
+      msg.genId=data.id;
       renderChatMessages();
+      persistChatGenTask();
       setTimeout(()=>poll(data.id),3000);
       return;
     }
@@ -2727,9 +2988,16 @@ async function sendChatVideo(text){
       renderChatMessages();
       setTimeout(submitTask,backoffMs);
     }else if(nerr){
-      msg.genMsg='网络异常，重试中…';
-      renderChatMessages();
-      setTimeout(submitTask,RETRY_WAIT);
+      // 网络错误：离线时等待恢复，否则按正常间隔重试
+      if(!isOnline){
+        msg.genMsg='📴 网络已断开，等待恢复后继续…';
+        renderChatMessages();
+        waitForOnline(()=>{if(chatLoading)submitTask();});
+      }else{
+        msg.genMsg='网络异常，重试中…';
+        renderChatMessages();
+        setTimeout(submitTask,RETRY_WAIT);
+      }
     }else{
       msg.genMsg='提交失败（HTTP '+(res?res.status:'?')+'），第 '+tries+' 次重试…';
       renderChatMessages();
@@ -2748,6 +3016,13 @@ async function sendChatVideo(text){
     if(!chatLoading)return;
     const msg=chatHistory[replyIdx];
     if(nerr||!res||!res.ok){
+      // 网络异常：离线时等待恢复，否则按正常间隔重试
+      if(nerr&&!isOnline){
+        msg.genMsg='📴 网络已断开，等待恢复后继续查询…';
+        renderChatMessages();
+        waitForOnline(()=>{if(chatLoading)poll(id);});
+        return;
+      }
       msg.genMsg='查询状态失败，稍后再试…';
       renderChatMessages();
       setTimeout(()=>poll(id),5000);
@@ -2774,6 +3049,7 @@ async function sendChatVideo(text){
         msg.content='✅ 视频生成完成\n提示词：'+text.slice(0,50)+(text.length>50?'…':'');
         chatLoading=false;
         document.getElementById('chatSendBtn').disabled=false;
+        localStorage.removeItem(CHAT_GEN_KEY);
         renderChatMessages();
         return;
       }
@@ -2781,6 +3057,7 @@ async function sendChatVideo(text){
       msg.errorMsg='生成成功但无视频地址';
       chatLoading=false;
       document.getElementById('chatSendBtn').disabled=false;
+      localStorage.removeItem(CHAT_GEN_KEY);
       renderChatMessages();
       return;
     }
@@ -2789,6 +3066,7 @@ async function sendChatVideo(text){
       msg.errorMsg=data.error?.message||data.data?.error||'生成失败';
       chatLoading=false;
       document.getElementById('chatSendBtn').disabled=false;
+      localStorage.removeItem(CHAT_GEN_KEY);
       renderChatMessages();
       return;
     }
@@ -2879,6 +3157,139 @@ function toggleToolMore(){
 let chatHistoryFileHandle=null;
 let chatSaveTimer=null;
 const CHAT_HISTORY_FILE='chat_history.json';
+const CHAT_GEN_KEY='pavo_chat_gen_task';
+
+// 保存聊天生成任务状态（页面卸载前调用）
+function persistChatGenTask(){
+  if(!chatLoading)return;
+  const msg=chatHistory.find(m=>m.genState==='loading');
+  if(!msg||!msg.genId)return;
+  try{
+    localStorage.setItem(CHAT_GEN_KEY,JSON.stringify({
+      genId:msg.genId,
+      type:msg.type,
+      content:msg.content,
+      ratio:msg.ratio,
+      genMsg:msg.genMsg,
+      createdAt:Date.now()
+    }));
+  }catch(e){}
+}
+// 恢复聊天生成任务
+function restoreChatGenTask(){
+  try{
+    const raw=localStorage.getItem(CHAT_GEN_KEY);
+    if(!raw)return;
+    const task=JSON.parse(raw);
+    if(task.createdAt&&Date.now()-task.createdAt>2*60*60*1000){
+      localStorage.removeItem(CHAT_GEN_KEY);
+      return;
+    }
+    let msg=chatHistory.find(m=>m.genId===task.genId);
+    if(!msg){
+      chatHistory.push({
+        role:'assistant',
+        content:task.content||('🔄 恢复'+(task.type==='image'?'图片':'视频')+'生成…'),
+        type:task.type,
+        ratio:task.ratio,
+        genState:'loading',
+        genMsg:'🔄 恢复中…',
+        genId:task.genId
+      });
+    }else{
+      msg.genState='loading';
+      msg.genMsg='🔄 恢复中…';
+    }
+    chatLoading=true;
+    if(task.type==='video'){
+      resumeChatVideoPoll(task.genId);
+    }else{
+      const lastMsg=chatHistory[chatHistory.length-1];
+      lastMsg.genState='error';
+      lastMsg.errorMsg='页面刷新后无法恢复图片生成，请重新提交';
+      chatLoading=false;
+      localStorage.removeItem(CHAT_GEN_KEY);
+    }
+    renderChatMessages();
+  }catch(e){
+    console.warn('恢复聊天生成任务失败',e);
+  }
+}
+// 恢复聊天视频轮询
+function resumeChatVideoPoll(videoId){
+  const pollBase=API_BASE.replace('/v1','');
+  const replyIdx=chatHistory.findIndex(m=>m.genId===videoId);
+  if(replyIdx<0){chatLoading=false;return;}
+  let pollDelay=5000;
+  async function poll(){
+    if(!chatLoading)return;
+    let res=null,data=null,nerr=null;
+    try{
+      res=await fetch(pollBase+"/api/open/v1/videos/"+videoId+"?model_name=agnes-video-2.5-flash",{
+        headers:{"Authorization":"Bearer "+API_KEY}
+      });
+      data=await res.json();
+    }catch(e){nerr=e;}
+    if(!chatLoading)return;
+    const msg=chatHistory[replyIdx];
+    if(nerr||!res||!res.ok){
+      if(nerr&&!isOnline){
+        msg.genMsg='📴 网络已断开，等待恢复后继续查询…';
+        renderChatMessages();
+        waitForOnline(()=>{if(chatLoading)poll();});
+        return;
+      }
+      msg.genMsg='查询状态失败，稍后再试…';
+      renderChatMessages();
+      setTimeout(()=>poll(),5000);
+      return;
+    }
+    const status=data.status||data.data?.status;
+    const progress=data.progress||data.data?.progress||0;
+    if(status==='succeeded'||status==='completed'){
+      const videoUrl=data.video_url||data.data?.video_url||(data.data?.outputs?.[0]?.url);
+      if(videoUrl){
+        let localSrc=videoUrl,localFid=null;
+        try{
+          const blob=await fetch(videoUrl).then(r=>r.blob());
+          if(blob&&blob.size>0){
+            localFid='ai_'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
+            await fileDB.put(localFid,blob);
+            localSrc=URL.createObjectURL(blob);
+          }
+        }catch(e){console.warn('聊天视频本地保存失败',e);}
+        msg.genState='done';
+        msg.mediaUrl=localSrc;
+        msg._fileId=localFid;
+        msg.content='✅ 视频生成完成（已恢复）';
+        chatLoading=false;
+        document.getElementById('chatSendBtn').disabled=false;
+        localStorage.removeItem(CHAT_GEN_KEY);
+        renderChatMessages();
+        saveChatHistoryDebounced();
+        return;
+      }
+      msg.genState='error';
+      msg.errorMsg='任务完成但未获取到视频地址';
+      chatLoading=false;
+      document.getElementById('chatSendBtn').disabled=false;
+      localStorage.removeItem(CHAT_GEN_KEY);
+      renderChatMessages();
+    }else if(status==='failed'||status==='error'){
+      msg.genState='error';
+      msg.errorMsg='生成失败';
+      chatLoading=false;
+      document.getElementById('chatSendBtn').disabled=false;
+      localStorage.removeItem(CHAT_GEN_KEY);
+      renderChatMessages();
+    }else{
+      msg.genMsg='生成中…'+(progress?(' '+progress+'%'):'');
+      renderChatMessages();
+      setTimeout(()=>poll(),pollDelay);
+    }
+  }
+  poll();
+}
 
 // 将聊天历史序列化（blob URL 转 base64）
 function serializeChatHistory(history){
@@ -3926,13 +4337,23 @@ if(window.visualViewport){
 }
 
 (async function init(){
+  // 离线状态监听
+  window.addEventListener('online',updateOnlineStatus);
+  window.addEventListener('offline',updateOnlineStatus);
+  updateOnlineStatus();
   refreshTopBar();
   updateZoomText();
   applySettings();
   const sh=await ensureSyncPerm(true);
   if(sh){
     applySettings();
-    loadChatHistory();
+    loadChatHistory().then(()=>{
+      // 聊天历史加载完后，恢复进行中的生成任务
+      restoreChatGenTask();
+    });
+  }else{
+    // 没有同步文件夹也尝试恢复（localStorage 里可能有）
+    restoreChatGenTask();
   }
   const last=localStorage.getItem('pavo_last');
   const projs=loadProjects();
