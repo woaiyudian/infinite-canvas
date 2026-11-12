@@ -508,6 +508,35 @@ function waitForOnline(fn){
     if(i>=0)offlineListeners.splice(i,1);
   };
 }
+// ---- 后台节流补偿：页面从后台切回前台时，补执行错过的重试 ----
+// 浏览器后台标签页会节流 setTimeout/setInterval，长计时器可能延迟很久
+// 解决：记录下一次重试的计划时间，页面重新可见时如果已过点就立即执行
+let nextRetryPlan=null; // { time: number, fn: Function, id: number }
+let _retryPlanId=0;
+// 替代 setTimeout 用于重试调度，同时记录计划时间
+function scheduleRetry(fn,ms){
+  const id=++_retryPlanId;
+  const t=Date.now()+ms;
+  nextRetryPlan={time:t,fn:fn,id:id};
+  const timer=setTimeout(()=>{
+    // 正常触发：如果计划没变就清掉
+    if(nextRetryPlan&&nextRetryPlan.id===id)nextRetryPlan=null;
+    fn();
+  },ms);
+  // 返回取消函数
+  return ()=>{
+    clearTimeout(timer);
+    if(nextRetryPlan&&nextRetryPlan.id===id)nextRetryPlan=null;
+  };
+}
+// 页面可见性变化：从后台切回前台时补执行错过的重试
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='visible'&&nextRetryPlan&&Date.now()>=nextRetryPlan.time){
+    const plan=nextRetryPlan;
+    nextRetryPlan=null;
+    try{plan.fn();}catch(e){}
+  }
+});
 // ---- 生成任务持久化：刷新/重开页面后自动恢复继续生成 ----
 const GEN_TASK_KEY='pavo_gen_tasks';
 function loadGenTasks(){
@@ -791,7 +820,7 @@ function resumeVideoPoll(vid,node,ctl){
   let pollDelay=5000;
   function later(fn,ms){
     if(!waitCtl||waitCtl.cancelled)return;
-    setTimeout(()=>{if(waitCtl&&!waitCtl.cancelled)fn();},ms);
+    scheduleRetry(()=>{if(waitCtl&&!waitCtl.cancelled)fn();},ms);
   }
   async function poll(){
     if(!waitCtl||waitCtl.cancelled)return;
@@ -2286,7 +2315,7 @@ function doSubmitImage(payload,ratio,item){
   }
   function later(fn,ms){
     if(!waitCtl||waitCtl.cancelled)return;
-    setTimeout(()=>{if(waitCtl&&!waitCtl.cancelled)fn();},ms);
+    scheduleRetry(()=>{if(waitCtl&&!waitCtl.cancelled)fn();},ms);
   }
   async function submit(){
     if(!waitCtl||waitCtl.cancelled)return;
@@ -2398,7 +2427,7 @@ function doSubmitVideo(payload,ctl,initialQueueFails,item){
   }
   function later(fn,ms){
     if(!waitCtl||waitCtl.cancelled)return;
-    setTimeout(()=>{if(waitCtl&&!waitCtl.cancelled)fn();},ms);
+    scheduleRetry(()=>{if(waitCtl&&!waitCtl.cancelled)fn();},ms);
   }
   async function submitTask(){
     if(!waitCtl||waitCtl.cancelled)return;
@@ -2892,7 +2921,7 @@ async function sendChatImage(text){
       }
       msg.genMsg='返回中无图片地址，重试中…';
       renderChatMessages();
-      setTimeout(submit,RETRY_WAIT);
+      scheduleRetry(()=>{if(chatLoading)submit();},RETRY_WAIT);
       return;
     }
     // 失败处理
@@ -2907,7 +2936,7 @@ async function sendChatImage(text){
       const mins=(backoffMs/60000).toFixed(0);
       msg.genMsg='队列已满（第 '+queueFails+' 次），'+mins+' 分钟后再试…';
       renderChatMessages();
-      setTimeout(submit,backoffMs);
+      scheduleRetry(()=>{if(chatLoading)submit();},backoffMs);
     }else if(nerr){
       // 网络错误：离线时等待恢复，否则按正常间隔重试
       if(!isOnline){
@@ -2917,12 +2946,12 @@ async function sendChatImage(text){
       }else{
         msg.genMsg='网络异常，重试中…';
         renderChatMessages();
-        setTimeout(submit,RETRY_WAIT);
+        scheduleRetry(()=>{if(chatLoading)submit();},RETRY_WAIT);
       }
     }else{
       msg.genMsg='暂未成功（HTTP '+(res?res.status:'?')+'），第 '+tries+' 次重试…';
       renderChatMessages();
-      setTimeout(submit,RETRY_WAIT);
+      scheduleRetry(()=>{if(chatLoading)submit();},RETRY_WAIT);
     }
   }
   submit();
@@ -2972,7 +3001,7 @@ async function sendChatVideo(text){
       msg.genId=data.id;
       renderChatMessages();
       persistChatGenTask();
-      setTimeout(()=>poll(data.id),3000);
+      scheduleRetry(()=>{if(chatLoading)poll(data.id);},3000);
       return;
     }
     const isQueueFull=data&&data.code==='video_queue_full';
@@ -2986,7 +3015,7 @@ async function sendChatVideo(text){
       const mins=(backoffMs/60000).toFixed(0);
       msg.genMsg='队列已满（第 '+queueFails+' 次），'+mins+' 分钟后再试…';
       renderChatMessages();
-      setTimeout(submitTask,backoffMs);
+      scheduleRetry(()=>{if(chatLoading)submitTask();},backoffMs);
     }else if(nerr){
       // 网络错误：离线时等待恢复，否则按正常间隔重试
       if(!isOnline){
@@ -2996,12 +3025,12 @@ async function sendChatVideo(text){
       }else{
         msg.genMsg='网络异常，重试中…';
         renderChatMessages();
-        setTimeout(submitTask,RETRY_WAIT);
+        scheduleRetry(()=>{if(chatLoading)submitTask();},RETRY_WAIT);
       }
     }else{
       msg.genMsg='提交失败（HTTP '+(res?res.status:'?')+'），第 '+tries+' 次重试…';
       renderChatMessages();
-      setTimeout(submitTask,RETRY_WAIT);
+      scheduleRetry(()=>{if(chatLoading)submitTask();},RETRY_WAIT);
     }
   }
   async function poll(id){
@@ -3025,7 +3054,7 @@ async function sendChatVideo(text){
       }
       msg.genMsg='查询状态失败，稍后再试…';
       renderChatMessages();
-      setTimeout(()=>poll(id),5000);
+      scheduleRetry(()=>{if(chatLoading)poll(id);},5000);
       return;
     }
     const status=data.status||data.data?.status;
@@ -3075,7 +3104,7 @@ async function sendChatVideo(text){
     const label=status==='processing'?'生成中':(status==='queued'?'排队中':status);
     msg.genMsg=label+(pct?(' '+pct):'');
     renderChatMessages();
-    setTimeout(()=>poll(id),4000);
+    scheduleRetry(()=>{if(chatLoading)poll(id);},4000);
   }
   submitTask();
 }
@@ -3241,7 +3270,7 @@ function resumeChatVideoPoll(videoId){
       }
       msg.genMsg='查询状态失败，稍后再试…';
       renderChatMessages();
-      setTimeout(()=>poll(),5000);
+      scheduleRetry(()=>{if(chatLoading)poll();},5000);
       return;
     }
     const status=data.status||data.data?.status;
@@ -3285,7 +3314,7 @@ function resumeChatVideoPoll(videoId){
     }else{
       msg.genMsg='生成中…'+(progress?(' '+progress+'%'):'');
       renderChatMessages();
-      setTimeout(()=>poll(),pollDelay);
+      scheduleRetry(()=>{if(chatLoading)poll();},pollDelay);
     }
   }
   poll();
