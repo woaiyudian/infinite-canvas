@@ -508,20 +508,34 @@ function waitForOnline(fn){
     if(i>=0)offlineListeners.splice(i,1);
   };
 }
-// ---- 后台节流补偿：页面从后台切回前台时，补执行错过的重试 ----
-// 浏览器后台标签页会节流 setTimeout/setInterval，长计时器可能延迟很久
-// 解决：记录下一次重试的计划时间，页面重新可见时如果已过点就立即执行
+// ---- 后台节流补偿：心跳检查模式，后台重试误差控制在1分钟内 ----
+// 浏览器后台标签页会节流 setTimeout/setInterval，长计时器（3/6/15分钟）可能延迟很久
+// 解决方案：用心跳检查器每20秒检查一次是否到了重试时间
+// 后台即使被浏览器节流到1分钟一次，误差也只有约1分钟，远比延迟十几分钟好
+// 同时保留 visibilitychange 切回前台时立即补执行的逻辑
 let nextRetryPlan=null; // { time: number, fn: Function, id: number }
 let _retryPlanId=0;
-// 替代 setTimeout 用于重试调度，同时记录计划时间
+const HEARTBEAT_INTERVAL=20000; // 20秒心跳
+// 启动心跳检查器
+setInterval(()=>{
+  if(nextRetryPlan&&Date.now()>=nextRetryPlan.time){
+    const plan=nextRetryPlan;
+    nextRetryPlan=null;
+    try{plan.fn();}catch(e){console.warn('重试任务执行失败',e);}
+  }
+},HEARTBEAT_INTERVAL);
+// 替代 setTimeout 用于重试调度
+// 前台靠 setTimeout 精确触发，后台靠心跳检查兜底
 function scheduleRetry(fn,ms){
   const id=++_retryPlanId;
   const t=Date.now()+ms;
   nextRetryPlan={time:t,fn:fn,id:id};
+  // 前台时 setTimeout 会精确触发，触发后清除计划
   const timer=setTimeout(()=>{
-    // 正常触发：如果计划没变就清掉
-    if(nextRetryPlan&&nextRetryPlan.id===id)nextRetryPlan=null;
-    fn();
+    if(nextRetryPlan&&nextRetryPlan.id===id){
+      nextRetryPlan=null;
+      fn();
+    }
   },ms);
   // 返回取消函数
   return ()=>{
@@ -529,7 +543,7 @@ function scheduleRetry(fn,ms){
     if(nextRetryPlan&&nextRetryPlan.id===id)nextRetryPlan=null;
   };
 }
-// 页面可见性变化：从后台切回前台时补执行错过的重试
+// 页面可见性变化：从后台切回前台时立即补执行错过的重试（双保险）
 document.addEventListener('visibilitychange',()=>{
   if(document.visibilityState==='visible'&&nextRetryPlan&&Date.now()>=nextRetryPlan.time){
     const plan=nextRetryPlan;
