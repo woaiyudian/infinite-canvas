@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<title>Pavo分镜画布-右键菜单+框选版</title>
+<title>无线画布</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;font-family:system-ui}
 body{overflow:hidden;background:#0a0b10;color:#fff;height:100vh;height:100dvh;overscroll-behavior:none}
@@ -731,6 +731,7 @@ function serializeNodes(nodesArr){
       if(k==='videoSnap')continue; // 画布元素，单独编译
       if(k==='_genState')continue; // 生成中运行时状态，不保存
       if(k==='_restoredFrom')continue; // 临时引用，不保存
+      if(k==='_objectUrl')continue; // Blob URL，刷新后失效，由 rehydrateFile 重建
       if(k==='_fitted'){out[k]=v;continue;}
       if(typeof v==='object'&&!(v instanceof Array)&&v.tagName)continue; // 其他 DOM 元素
       out[k]=v;
@@ -919,10 +920,14 @@ function resumeVideoPoll(vid,node,ctl){
         pendingTarget=null;
         destroyVideo(tgt);
         tgt.type='video';tgt.isVideo=true;
-        tgt.text='';tgt.src=localSrc;tgt.videoSnap=null;
+        tgt.text='';tgt.src=localSrc;tgt._objectUrl=localSrc;tgt.videoSnap=null;
         if(localFid)tgt._fileId=localFid;
         tgt._fitted=false;
         if(!tgt.title)tgt.title='AI生成视频';
+        // 创建视频元素并加载
+        const v=document.createElement('video');
+        v.src=localSrc;
+        attachVideo(tgt,v);
         saveProjects();
         draw();
         endWait();
@@ -3706,15 +3711,36 @@ function drawCover(el,n){
 }
 // 创建视频元素并挂上元数据回调，让卡片跟随视频真实宽高比
 function attachVideo(n,v){
-  v.muted=true;v.preload='auto';
+  v.muted=true;v.preload='auto';v.playsInline=true;
+  let snapCaptured=false;
+  function trySnap(){
+    if(snapCaptured)return;
+    if(v.readyState>=2&&v.videoWidth>0){
+      captureVideoSnap(n);
+      snapCaptured=true;
+    }
+  }
   v.addEventListener('loadedmetadata',()=>{
     if(v.videoWidth)fitNodeByAspect(n,v.videoWidth,v.videoHeight);
-    // 预加载停在元数据时 readyState 到不了 2，借一次极短播放强制解码首帧再暂停
-    try{const pr=v.play();if(pr&&pr.catch)pr.catch(()=>{});}catch(e){}
-    setTimeout(()=>{try{v.pause();}catch(e){}},150);
+    // 跳到0.1秒位置强制解码首帧（比play/pause更可靠）
+    try{
+      v.currentTime=Math.min(0.1,v.duration||0.1);
+    }catch(e){
+      // 有些浏览器不支持 seek，退而求其次用 play/pause
+      try{const pr=v.play();if(pr&&pr.catch)pr.catch(()=>{});}catch(e2){}
+      setTimeout(()=>{try{v.pause();}catch(e2){}},200);
+    }
   });
-  v.addEventListener('loadeddata',()=>{captureVideoSnap(n);});
-  v.addEventListener('seeked',()=>{captureVideoSnap(n);});
+  v.addEventListener('loadeddata',trySnap);
+  v.addEventListener('seeked',trySnap);
+  v.addEventListener('canplay',trySnap);
+  v.addEventListener('error',()=>{
+    console.warn('视频加载失败',v.src?.slice(0,50));
+  });
+  // 兜底：2秒后如果还没抓到快照，强制试一次
+  setTimeout(()=>{
+    if(!snapCaptured&&v.readyState>=2)trySnap();
+  },2000);
   n.videoEl=v;
 }
 // 端口命中：世界坐标下找半径内最近的圆点
