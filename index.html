@@ -508,49 +508,82 @@ function waitForOnline(fn){
     if(i>=0)offlineListeners.splice(i,1);
   };
 }
-// ---- 后台节流补偿：心跳检查模式，后台重试误差控制在1分钟内 ----
-// 浏览器后台标签页会节流 setTimeout/setInterval，长计时器（3/6/15分钟）可能延迟很久
-// 解决方案：用心跳检查器每20秒检查一次是否到了重试时间
-// 后台即使被浏览器节流到1分钟一次，误差也只有约1分钟，远比延迟十几分钟好
-// 同时保留 visibilitychange 切回前台时立即补执行的逻辑
-let nextRetryPlan=null; // { time: number, fn: Function, id: number }
-let _retryPlanId=0;
-const HEARTBEAT_INTERVAL=20000; // 20秒心跳
-// 启动心跳检查器
-setInterval(()=>{
-  if(nextRetryPlan&&Date.now()>=nextRetryPlan.time){
-    const plan=nextRetryPlan;
-    nextRetryPlan=null;
-    try{plan.fn();}catch(e){console.warn('重试任务执行失败',e);}
-  }
-},HEARTBEAT_INTERVAL);
-// 替代 setTimeout 用于重试调度
-// 前台靠 setTimeout 精确触发，后台靠心跳检查兜底
-function scheduleRetry(fn,ms){
-  const id=++_retryPlanId;
-  const t=Date.now()+ms;
-  nextRetryPlan={time:t,fn:fn,id:id};
-  // 前台时 setTimeout 会精确触发，触发后清除计划
-  const timer=setTimeout(()=>{
-    if(nextRetryPlan&&nextRetryPlan.id===id){
-      nextRetryPlan=null;
-      fn();
-    }
-  },ms);
-  // 返回取消函数
-  return ()=>{
-    clearTimeout(timer);
-    if(nextRetryPlan&&nextRetryPlan.id===id)nextRetryPlan=null;
-  };
+// ---- 后台重试调度：短链+多事件唤醒+持久化时间戳 ----
+// 问题：浏览器后台标签页会严重节流 setTimeout/setInterval
+// 策略：
+//  1. 长延迟拆成短链（每30秒一段），短计时器被节流的概率低很多
+//  2. 把目标时间存 localStorage，页面刷新/重开也能续上
+//  3. 多事件唤醒：visibilitychange / focus / online / message
+//  4. 心跳兜底：30秒检查一次
+const RETRY_PLAN_KEY='pavo_retry_plan';
+let _retryPlanFn=null;   // 当前重试的回调函数（内存中，刷新后需要重建）
+let _retryChainTimer=null;
+// 持久化写入重试计划（刷新不丢）
+function writeRetryPlan(targetTime){
+  try{
+    localStorage.setItem(RETRY_PLAN_KEY,JSON.stringify({
+      time:targetTime,
+      savedAt:Date.now()
+    }));
+  }catch(e){}
 }
-// 页面可见性变化：从后台切回前台时立即补执行错过的重试（双保险）
-document.addEventListener('visibilitychange',()=>{
-  if(document.visibilityState==='visible'&&nextRetryPlan&&Date.now()>=nextRetryPlan.time){
-    const plan=nextRetryPlan;
-    nextRetryPlan=null;
-    try{plan.fn();}catch(e){}
+function clearRetryPlan(){
+  try{localStorage.removeItem(RETRY_PLAN_KEY);}catch(e){}
+  _retryPlanFn=null;
+  if(_retryChainTimer){clearTimeout(_retryChainTimer);_retryChainTimer=null;}
+}
+// 检查是否到了重试时间（所有唤醒事件都调用这个）
+function checkRetry(){
+  try{
+    const raw=localStorage.getItem(RETRY_PLAN_KEY);
+    if(!raw||!_retryPlanFn)return;
+    const plan=JSON.parse(raw);
+    if(plan.time&&Date.now()>=plan.time){
+      const fn=_retryPlanFn;
+      clearRetryPlan();
+      try{fn();}catch(e){console.warn('重试执行失败',e);}
+    }
+  }catch(e){}
+}
+// 短链调度：把长延迟拆成最多30秒一段的链式 setTimeout
+// 浏览器对短计时器的节流比长计时器轻很多
+function scheduleRetry(fn,ms){
+  clearRetryPlan();
+  const target=Date.now()+ms;
+  _retryPlanFn=fn;
+  writeRetryPlan(target);
+  function chain(){
+    const remaining=target-Date.now();
+    if(remaining<=0){
+      // 到点了
+      const f=_retryPlanFn;
+      clearRetryPlan();
+      try{f&&f();}catch(e){console.warn('重试执行失败',e);}
+      return;
+    }
+    // 每次最多30秒
+    const step=Math.min(remaining,30000);
+    _retryChainTimer=setTimeout(()=>{
+      // 每次唤醒时检查一下（可能已经被其他事件触发了）
+      if(!_retryPlanFn)return;
+      checkRetry();
+      if(_retryPlanFn)chain(); // 还没到点，继续下一段
+    },step);
   }
+  chain();
+  // 返回取消函数
+  return clearRetryPlan;
+}
+// 多重唤醒事件：任何可能表示"用户回来了/页面活了"的事件都检查一下
+['visibilitychange','focus','online','pageshow','message'].forEach(ev=>{
+  window.addEventListener(ev,checkRetry,{passive:true});
 });
+window.addEventListener('focus',checkRetry,{passive:true});
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='visible')checkRetry();
+},{passive:true});
+// 心跳兜底：30秒一次（后台会被节流，但比长计时器好）
+setInterval(checkRetry,30000);
 // ---- 生成任务持久化：刷新/重开页面后自动恢复继续生成 ----
 const GEN_TASK_KEY='pavo_gen_tasks';
 function loadGenTasks(){
