@@ -677,6 +677,7 @@ function wakeVideo(node){
   node.videoPlaying=true;
   activeVideoNode=node;
 }
+let _snapSaveTimer=null;
 function captureVideoSnap(node){
   if(!node.videoEl)return;
   const v=node.videoEl;
@@ -685,7 +686,14 @@ function captureVideoSnap(node){
   c.width=v.videoWidth;
   c.height=v.videoHeight;
   const cc=c.getContext('2d');
-  try{cc.drawImage(v,0,0);node.videoSnap=c;draw();}catch(e){}
+  try{
+    cc.drawImage(v,0,0);
+    node.videoSnap=c;
+    draw();
+    // 有了快照后延迟保存项目（防抖），刷新后立即有缩略图
+    if(_snapSaveTimer)clearTimeout(_snapSaveTimer);
+    _snapSaveTimer=setTimeout(()=>{saveProjects();_snapSaveTimer=null;},1000);
+  }catch(e){}
 }
 function ensureVideoEl(n){
   if(n.isVideo&&n._objectUrl&&(!n.videoEl||typeof n.videoEl.pause!=='function')){
@@ -2597,7 +2605,7 @@ function doSubmitVideo(payload,ctl,initialQueueFails,item){
       if(tgt){
         destroyVideo(tgt);
         tgt.type='video';tgt.isVideo=true;
-        tgt.text='';tgt.src=localSrc;tgt.videoSnap=null;tgt._fitted=false;
+        tgt.text='';tgt.src=localSrc;tgt._objectUrl=localSrc;tgt.videoSnap=null;tgt._fitted=false;
         if(!tgt.title)tgt.title='AI生成视频';
       }
       if(localFid)n._fileId=localFid;
@@ -3829,6 +3837,20 @@ function draw(){
       }
     }else if(n.isVideo){
       mediaEl=(n.videoEl&&n.videoEl.readyState>=2)?n.videoEl:n.videoSnap;
+      // 视频加载中但还没有画面时，显示加载占位
+      if(!mediaEl&&n.videoEl&&n.src){
+        ctx.save();
+        roundRect(n.x,n.y,n.w,n.h,10);
+        ctx.clip();
+        ctx.fillStyle='#1a1d2e';
+        ctx.fillRect(n.x,n.y,n.w,n.h);
+        ctx.fillStyle='#6b7488';
+        ctx.font='12px system-ui';
+        ctx.textAlign='center';
+        ctx.fillText('⏳ 视频加载中…',n.x+n.w/2,n.y+n.h/2);
+        ctx.textAlign='left';
+        ctx.restore();
+      }
     }
     if(mediaEl){
       ctx.save();
