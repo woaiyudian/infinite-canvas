@@ -819,7 +819,14 @@ function loadProject(id){
   selectedEdge=null;portDrag=null;
   camX=d.camX||0;camY=d.camY||0;zoom=d.zoom||1;
   currentProjectId=id;
-  nodes.forEach(n=>{if(n._fileId)rehydrateFile(n);});
+  // 异步恢复所有文件，并在全部完成后触发一次完整重绘
+  const fileNodes=nodes.filter(n=>n._fileId);
+  if(fileNodes.length){
+    Promise.all(fileNodes.map(n=>rehydrateFile(n))).then(()=>{
+      // 所有文件恢复完后再画一次，确保内容完整显示
+      draw();
+    });
+  }
   localStorage.setItem('pavo_last',id);
   refreshTopBar();
   updateZoomText();
@@ -1462,9 +1469,46 @@ async function writeAllToFolder(p){
     const base=String(nm).replace(/[\\/:*?"<>|]/g,'_').slice(0,60)+'.json';
     if(!allNames.has(base))allNames.set(base,id);
   });
-  let n=0,bigWarned=0,missTotal=0;
+  let n=0,bigWarned=0,missTotal=0,failCount=0;
   const HISTORY_DIR='_history';
   const MAX_VERSIONS=20;
+  // 原子写入：先写 .tmp 临时文件，成功后再替换正式文件
+  // 防止写入中断导致备份文件损坏（加载不全的常见原因）
+  async function atomicWrite(dirHandle,fileName,dataStr){
+    const tmpName=fileName+'.tmp';
+    try{
+      // 1. 写临时文件
+      const tfh=await dirHandle.getFileHandle(tmpName,{create:true});
+      const tw=await tfh.createWritable();
+      await tw.write(dataStr);
+      await tw.close();
+      // 2. 验证写入完整性（读回来校验）
+      try{
+        const verifyFile=await tfh.getFile();
+        const verifyText=await verifyFile.text();
+        if(verifyText.length!==dataStr.length){
+          throw new Error('写入长度不匹配：期望 '+dataStr.length+'，实际 '+verifyText.length);
+        }
+      }catch(ve){
+        console.warn('write verify skipped',ve);
+      }
+      // 3. 删除旧文件，重命名临时文件为正式文件名
+      //    注意：File System Access API 没有 rename，用删旧+移新的方式
+      try{await dirHandle.removeEntry(fileName);}catch(e){/* 可能不存在，忽略 */}
+      // 重新获取正式文件句柄并写入
+      const fh=await dirHandle.getFileHandle(fileName,{create:true});
+      const w=await fh.createWritable();
+      await w.write(dataStr);
+      await w.close();
+      // 清理临时文件
+      try{await dirHandle.removeEntry(tmpName);}catch(e){}
+      return true;
+    }catch(e){
+      // 失败了清理临时文件
+      try{await dirHandle.removeEntry(tmpName);}catch(_){}
+      throw e;
+    }
+  }
   for(const id of Object.keys(p)){
     const proj=p[id];
     try{
@@ -1476,25 +1520,20 @@ async function writeAllToFolder(p){
       }
       const fn=syncFileName(proj,id,allNames);
       const data=JSON.stringify(Object.assign({projectId:id},proj,{_files:files}));
-      // 1. 写入主备份文件（当前版本）
-      const fh=await syncHandle.getFileHandle(fn,{create:true});
-      const w=await fh.createWritable();
-      await w.write(data);
-      await w.close();n++;
+      // 1. 写入主备份文件（原子写入，防损坏）
+      const ok=await atomicWrite(syncHandle,fn,data);
+      if(ok)n++;
       // 2. 写入历史版本（带时间戳）
       try{
         const histDir=await syncHandle.getDirectoryHandle(HISTORY_DIR,{create:true});
         const baseName=fn.replace(/\.json$/i,'');
         const ts=new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
         const verFn=baseName+'_'+ts+'.json';
-        const vfh=await histDir.getFileHandle(verFn,{create:true});
-        const vw=await vfh.createWritable();
-        await vw.write(data);
-        await vw.close();
+        await atomicWrite(histDir,verFn,data);
         // 3. 清理旧版本：保留最近 MAX_VERSIONS 个
         const versions=[];
         for await(const entry of histDir.values()){
-          if(entry.kind==='file'&&entry.name.startsWith(baseName+'_')&&entry.name.endsWith('.json')){
+          if(entry.kind==='file'&&entry.name.startsWith(baseName+'_')&&entry.name.endsWith('.json')&&!entry.name.endsWith('.tmp')){
             versions.push(entry.name);
           }
         }
@@ -1503,15 +1542,27 @@ async function writeAllToFolder(p){
           try{await histDir.removeEntry(versions[i]);}catch(_){}
         }
       }catch(he){console.warn('history write skipped',he);}
-    }catch(e){console.error('backup fail',id,e);}
+    }catch(e){
+      failCount++;
+      console.error('backup fail',id,e);
+    }
   }
   if(missTotal){toast('⚠ '+missTotal+' 个素材文件在本机库中缺失（可能属于其它设备浏览器），未能内嵌');}
+  if(failCount>0){console.warn(failCount+' 个项目备份失败');}
   return n;
 }
 async function trySync(manual){
   if(!syncHandle||syncing)return;
   syncing=true;
   try{
+    // 写入前先确认权限（权限可能过期）
+    const permOk=await ensureSyncPerm(!manual);
+    if(!permOk){
+      if(manual)toast('⚠ 文件夹权限已失效，请重新选择文件夹');
+      syncHandle=null;
+      syncing=false;
+      return;
+    }
     const p=loadProjects();
     // 关键：把内存中的实时画面并入待备份数据——自动保存被关闭时，
     // localStorage 里是旧版本，直接备份会丢刚才的编辑（卡片不全的根因之一）
@@ -1523,10 +1574,18 @@ async function trySync(manual){
     if(manual){
       const cur=p[currentProjectId];
       const cn=cur&&cur.nodes?cur.nodes.length:0;
-      toast(n?('✅ 已备份 '+n+' 个项目 · 当前项目 '+cn+' 张卡片（含全部卡片数据，素材已内嵌）'):'保存失败：文件夹不可写');
+      const total=Object.keys(p).length;
+      toast(n?('✅ 已备份 '+n+'/'+total+' 个项目 · 当前项目 '+cn+' 张卡片'):('❌ 备份失败（'+total+' 个项目全部写入失败，文件夹可能不可写）'));
     }
   }catch(e){
-    if(manual)toast('保存出错：'+e.message);
+    console.error('sync error',e);
+    // 权限相关错误，尝试重新申请
+    if(e&&(e.name==='NotAllowedError'||e.name==='SecurityError')){
+      syncHandle=null;
+      if(manual)toast('⚠ 文件夹权限已失效，请在设置里重新选择');
+    }else if(manual){
+      toast('保存出错：'+(e.message||e.name));
+    }
   }finally{syncing=false;}
 }
 function scheduleSync(){
@@ -1580,19 +1639,25 @@ function syncBtnClick(){
 async function scanFolderBackups(){
   const list=[];
   if(!syncHandle)return list;
-  let count=0;
+  let count=0,broken=0;
   try{
     for await (const entry of syncHandle.values()){
-      if(count++>=40)break;
+      if(count++>=80)break;
       if(entry.kind!=='file'||!/\.json$/i.test(entry.name))continue;
+      // 跳过临时文件（写入中断留下的）
+      if(entry.name.endsWith('.tmp'))continue;
       try{
         const f=await entry.getFile();
-        const d=JSON.parse(await f.text());
-        if(!d||!Array.isArray(d.nodes))continue;
-        list.push({rec:d,file:f.name,size:f.size,mtime:f.lastModified,nfiles:d._files?Object.keys(d._files).length:0});
-      }catch(e){}
+        // 文件太小（<50字节）很可能是损坏的
+        if(f.size<50){broken++;continue;}
+        const txt=await f.text();
+        const d=JSON.parse(txt);
+        if(!d||!Array.isArray(d.nodes)){broken++;continue;}
+        list.push({rec:d,file:f.name,size:f.size,mtime:f.lastModified,nfiles:d._files?Object.keys(d._files).length:0,nodes:d.nodes.length});
+      }catch(e){broken++;}
     }
   }catch(e){}
+  if(broken>0)console.warn('扫描到 '+broken+' 个损坏/不完整的备份文件，已跳过');
   return list;
 }
 // 备份里内嵌的 _files 写回本机 IndexedDB，恢复引用内容
@@ -3438,13 +3503,32 @@ async function saveChatHistory(){
     };
     const json=JSON.stringify(data);
     try{
-      const file=await syncHandle.getFileHandle(CHAT_HISTORY_FILE,{create:true});
-      const writable=await file.createWritable();
-      await writable.write(json);
-      await writable.close();
+      // 原子写入：先写临时文件再替换，防止写入中断导致文件损坏
+      const tmpName=CHAT_HISTORY_FILE+'.tmp';
+      const tmpFile=await syncHandle.getFileHandle(tmpName,{create:true});
+      const tw=await tmpFile.createWritable();
+      await tw.write(json);
+      await tw.close();
+      // 验证
+      try{
+        const vf=await tmpFile.getFile();
+        const vt=await vf.text();
+        if(vt.length!==json.length)throw new Error('聊天历史写入长度不匹配');
+      }catch(ve){console.warn('chat save verify skipped',ve);}
+      // 替换正式文件
+      try{await syncHandle.removeEntry(CHAT_HISTORY_FILE);}catch(e){}
+      const mainFile=await syncHandle.getFileHandle(CHAT_HISTORY_FILE,{create:true});
+      const mw=await mainFile.createWritable();
+      await mw.write(json);
+      await mw.close();
+      try{await syncHandle.removeEntry(tmpName);}catch(e){}
       updateChatSyncStatus(data.updated);
     }catch(e){
       console.warn('聊天历史写入文件夹失败',e);
+      // 权限失效时清空 handle
+      if(e&&(e.name==='NotAllowedError'||e.name==='SecurityError')){
+        syncHandle=null;
+      }
     }
   }catch(e){
     console.warn('保存聊天历史失败',e);
@@ -3825,6 +3909,7 @@ function draw(){
     ctx.fill();
     const isSel=selectedNodes.has(n);
     let mediaEl=null;
+    let loadingText=null;
     if(n.type==='img'&&n.src){
       if(!imgCache[n.src]){
         imgCache[n.src]=new Image();
@@ -3834,23 +3919,29 @@ function draw(){
       if(im.complete&&im.naturalWidth>0){
         if(!n._fitted){fitNodeByAspect(n,im.naturalWidth,im.naturalHeight);n._fitted=true;}
         mediaEl=im;
+      }else if(!im.complete){
+        loadingText='⏳ 图片加载中…';
       }
     }else if(n.isVideo){
       mediaEl=(n.videoEl&&n.videoEl.readyState>=2)?n.videoEl:n.videoSnap;
       // 视频加载中但还没有画面时，显示加载占位
       if(!mediaEl&&n.videoEl&&n.src){
-        ctx.save();
-        roundRect(n.x,n.y,n.w,n.h,10);
-        ctx.clip();
-        ctx.fillStyle='#1a1d2e';
-        ctx.fillRect(n.x,n.y,n.w,n.h);
-        ctx.fillStyle='#6b7488';
-        ctx.font='12px system-ui';
-        ctx.textAlign='center';
-        ctx.fillText('⏳ 视频加载中…',n.x+n.w/2,n.y+n.h/2);
-        ctx.textAlign='left';
-        ctx.restore();
+        loadingText='⏳ 视频加载中…';
       }
+    }
+    // 加载中占位显示
+    if(loadingText&&!mediaEl){
+      ctx.save();
+      roundRect(n.x,n.y,n.w,n.h,10);
+      ctx.clip();
+      ctx.fillStyle='#1a1d2e';
+      ctx.fillRect(n.x,n.y,n.w,n.h);
+      ctx.fillStyle='#6b7488';
+      ctx.font='12px system-ui';
+      ctx.textAlign='center';
+      ctx.fillText(loadingText,n.x+n.w/2,n.y+n.h/2);
+      ctx.textAlign='left';
+      ctx.restore();
     }
     if(mediaEl){
       ctx.save();
